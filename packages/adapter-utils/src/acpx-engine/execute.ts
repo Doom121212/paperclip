@@ -2150,26 +2150,96 @@ function sessionConfigOptions(prepared: AcpxPreparedRuntime): Array<{ key: strin
   return options;
 }
 
+/**
+ * Session config keys that are tuning preferences, not requirements. A backend
+ * that does not advertise one of these means "you don't get to tune this here",
+ * never "this agent cannot run" — dropping them keeps a CLI/backend version skew
+ * from converting a preference into an agent outage that nothing clears.
+ * `model` stays required: silently running the wrong model is worse than failing.
+ */
+const OPTIONAL_SESSION_CONFIG_KEYS = new Set(["effort", "service_tier", "features.fast_mode"]);
+
+async function advertisedConfigOptionKeys(input: {
+  runtime: AcpRuntime;
+  handle: AcpRuntimeHandle;
+}): Promise<Set<string> | null> {
+  if (!input.runtime.getCapabilities) return null;
+  try {
+    const capabilities = await input.runtime.getCapabilities({ handle: input.handle });
+    const keys = capabilities?.configOptionKeys;
+    return Array.isArray(keys) && keys.length > 0 ? new Set(keys) : null;
+  } catch {
+    // Capability discovery is best-effort; fall back to try-and-degrade below.
+    return null;
+  }
+}
+
 async function applySessionConfigOptions(input: {
   runtime: AcpRuntime;
   handle: AcpRuntimeHandle;
   prepared: AcpxPreparedRuntime;
   onLog: AdapterExecutionContext["onLog"];
 }) {
-  const options = sessionConfigOptions(input.prepared);
+  let options = sessionConfigOptions(input.prepared);
   if (options.length === 0) return;
   if (!input.runtime.setConfigOption) {
+    const required = options.filter((option) => !OPTIONAL_SESSION_CONFIG_KEYS.has(option.key));
+    if (required.length === 0) {
+      await input.onLog(
+        "stderr",
+        `[paperclip] ACPX runtime does not expose session config controls; continuing without optional ${options
+          .map((option) => option.key)
+          .join(", ")}.\n`,
+      );
+      return;
+    }
     const message =
       "ACPX runtime does not expose session config controls; upgrade ACPX or remove configured model, effort, and fast mode overrides.";
     await input.onLog("stderr", `[paperclip] ${message}\n`);
     throw new Error(message);
   }
+
+  const advertised = await advertisedConfigOptionKeys({
+    runtime: input.runtime,
+    handle: input.handle,
+  });
+  if (advertised) {
+    const dropped = options.filter(
+      (option) => OPTIONAL_SESSION_CONFIG_KEYS.has(option.key) && !advertised.has(option.key),
+    );
+    if (dropped.length > 0) {
+      options = options.filter((option) => !dropped.includes(option));
+      await input.onLog(
+        "stderr",
+        `[paperclip] ACPX session does not advertise ${dropped
+          .map((option) => option.key)
+          .join(", ")}; continuing without ${dropped.length === 1 ? "it" : "them"}.\n`,
+      );
+    }
+  }
+
   for (const option of options) {
-    await input.runtime.setConfigOption({
-      handle: input.handle,
-      key: option.key,
-      value: option.value,
-    });
+    try {
+      await input.runtime.setConfigOption({
+        handle: input.handle,
+        key: option.key,
+        value: option.value,
+      });
+    } catch (error) {
+      // Match on the code rather than the class: a duplicated acpx copy on the
+      // resolution path would break `instanceof` and turn the degrade path back
+      // into an outage.
+      const code = isAcpRuntimeError(error)
+        ? error.code
+        : (error as { code?: unknown } | null)?.code;
+      const unsupported = code === "ACP_BACKEND_UNSUPPORTED_CONTROL";
+      if (!unsupported || !OPTIONAL_SESSION_CONFIG_KEYS.has(option.key)) throw error;
+      await input.onLog(
+        "stderr",
+        `[paperclip] ACPX session rejected optional config ${option.key}=${option.value}; continuing without it.\n`,
+      );
+      continue;
+    }
     await input.onLog(
       "stdout",
       `[paperclip] Applied ACPX ${input.prepared.acpxAgent} config ${option.key}=${option.value}\n`,

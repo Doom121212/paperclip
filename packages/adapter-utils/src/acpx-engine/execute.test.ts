@@ -125,11 +125,28 @@ function createLocalSandboxRunner(
   };
 }
 
+type RuntimeBehavior = {
+  // When set, the fake runtime advertises exactly these config option keys.
+  configOptionKeys?: string[];
+  // Keys the backend rejects with ACP_BACKEND_UNSUPPORTED_CONTROL, mirroring
+  // acpx@0.12.0 when a session does not advertise the option.
+  unsupportedConfigKeys?: string[];
+};
+
 function buildRuntime(
   onSetConfigOption?: (input: { key: string; value: string }) => void,
   onEnsureSession?: (input: Record<string, unknown>) => void,
+  behavior: RuntimeBehavior = {},
 ) {
   return {
+    ...(behavior.configOptionKeys
+      ? {
+          getCapabilities: async () => ({
+            controls: [],
+            configOptionKeys: behavior.configOptionKeys,
+          }),
+        }
+      : {}),
     ensureSession: async (input: Record<string, unknown>) => {
       onEnsureSession?.(input);
       return ({
@@ -146,6 +163,13 @@ function buildRuntime(
       cancel: async () => {},
     }),
     setConfigOption: async (input: { key: string; value: string }) => {
+      if (behavior.unsupportedConfigKeys?.includes(input.key)) {
+        const error = new Error(
+          `ACP session does not advertise config option '${input.key}'. Supported config options: mode, model.`,
+        ) as Error & { code?: string };
+        error.code = "ACP_BACKEND_UNSUPPORTED_CONTROL";
+        throw error;
+      }
       onSetConfigOption?.(input);
     },
     close: async () => {},
@@ -162,8 +186,13 @@ async function runExecutor(
     runtimeMcp?: AdapterRuntimeMcpAccess;
     prepareRemoteManagedHome?: AcpxEngineExecutorOptions["prepareRemoteManagedHome"];
     startupTraceContext?: AdapterExecutionContext["startupTraceContext"];
+    runtimeBehavior?: RuntimeBehavior;
+    // Defaults to 0; set when a test deliberately drives the run to a failure.
+    expectExitCode?: number;
   } = {},
 ) {
+  // Captured before `createRuntime` shadows `options` with its own parameter.
+  const runtimeBehavior = options.runtimeBehavior ?? {};
   const runtimeOptions: Record<string, unknown>[] = [];
   const configOptions: Array<{ key: string; value: string }> = [];
   const sessionInputs: Record<string, unknown>[] = [];
@@ -179,6 +208,7 @@ async function runExecutor(
       return buildRuntime(
         ({ key, value }) => configOptions.push({ key, value }),
         (input) => sessionInputs.push(input),
+        runtimeBehavior,
       ) as never;
     },
   });
@@ -208,7 +238,7 @@ async function runExecutor(
     },
   } as never);
 
-  expect(result.exitCode).toBe(0);
+  expect(result.exitCode).toBe(options.expectExitCode ?? 0);
   return { logs, meta, events, runtimeOptions, configOptions, sessionInputs, result };
 }
 
@@ -515,6 +545,41 @@ describe("shared ACPX engine runtime behavior", () => {
       { key: "model", value: "gemini-2.5-pro" },
       { key: "effort", value: "high" },
     ]);
+  });
+
+  it("drops an optional config option the session does not advertise instead of failing the run", async () => {
+    const { configOptions, logs } = await runExecutor(
+      { agent: "gemini", model: "gemini-2.5-pro", thinkingEffort: "high" },
+      { runtimeBehavior: { configOptionKeys: ["mode", "model"] } },
+    );
+
+    expect(configOptions).toEqual([{ key: "model", value: "gemini-2.5-pro" }]);
+    expect(logs).toContainEqual({
+      stream: "stderr",
+      text: "[paperclip] ACPX session does not advertise effort; continuing without it.\n",
+    });
+  });
+
+  it("degrades when a backend that advertises nothing rejects an optional option at set time", async () => {
+    const { configOptions, logs } = await runExecutor(
+      { agent: "gemini", model: "gemini-2.5-pro", thinkingEffort: "high" },
+      { runtimeBehavior: { unsupportedConfigKeys: ["effort"] } },
+    );
+
+    expect(configOptions).toEqual([{ key: "model", value: "gemini-2.5-pro" }]);
+    expect(logs).toContainEqual({
+      stream: "stderr",
+      text: "[paperclip] ACPX session rejected optional config effort=high; continuing without it.\n",
+    });
+  });
+
+  it("still fails the run when the session rejects the required model option", async () => {
+    const { result } = await runExecutor(
+      { agent: "gemini", model: "gemini-2.5-pro", thinkingEffort: "high" },
+      { runtimeBehavior: { unsupportedConfigKeys: ["model"] }, expectExitCode: 1 },
+    );
+
+    expect(JSON.stringify(result)).toMatch(/does not advertise config option 'model'/);
   });
 
   it("does not inject CODEX_CONFIG or session config when Codex overrides are absent", async () => {
