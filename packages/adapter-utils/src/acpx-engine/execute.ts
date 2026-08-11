@@ -12,6 +12,7 @@ import type {
   AdapterExecutionResult,
   UsageSummary,
 } from "@paperclipai/adapter-utils";
+import { isProviderQuotaErrorText, parseProviderQuotaResetAt } from "../provider-quota.js";
 import {
   adapterExecutionTargetSessionIdentity,
   describeAdapterExecutionTarget,
@@ -2591,10 +2592,45 @@ function describeErrorDiagnostics(err: unknown): {
   return { errorName, acpCode, causeMessage, retryable, stackPreview };
 }
 
-function classifyError(
-  err: unknown,
-  phase?: AcpxExecutionPhase,
-): Pick<AdapterExecutionResult, "errorCode" | "errorMeta"> {
+/**
+ * ORU-582. A provider refusing us capacity is not a turn failure: the work is
+ * fine and the account is out of budget until a stated reset. The server has a
+ * full recovery contract for that — wait for the reset, keep the assignee,
+ * suppress takeover — keyed on `errorCode: "provider_quota"`. Until this
+ * classification existed the engine reported every such refusal as
+ * `acpx_turn_failed`, the contract never matched, and the agent stayed parked
+ * in `error` until a human cleared it by hand.
+ *
+ * Returns null unless the text really is a quota refusal, so an ordinary turn
+ * failure keeps its own code: mislabelling one as quota-blocked would suppress
+ * takeover and hold the issue for a reset that is never coming.
+ */
+function classifyProviderQuotaFailure(
+  parts: Array<string | null | undefined>,
+  now = new Date(),
+): {
+  errorCode: "provider_quota";
+  errorFamily: "provider_quota";
+  retryNotBefore: string | null;
+} | null {
+  if (!isProviderQuotaErrorText(...parts)) return null;
+  const text = parts.filter((part): part is string => Boolean(part)).join("\n");
+  const retryAt = parseProviderQuotaResetAt(text, now);
+  return {
+    errorCode: "provider_quota",
+    errorFamily: "provider_quota",
+    // A reset we cannot parse is left to the server's default quota backoff,
+    // which re-checks rather than sleeping on a time we invented.
+    retryNotBefore: retryAt ? retryAt.toISOString() : null,
+  };
+}
+
+type AcpxClassifiedError = Pick<
+  AdapterExecutionResult,
+  "errorCode" | "errorMeta" | "errorFamily" | "retryNotBefore"
+>;
+
+function classifyError(err: unknown, phase?: AcpxExecutionPhase): AcpxClassifiedError {
   const message = err instanceof Error ? err.message : String(err);
   const diagnostics = describeErrorDiagnostics(err);
   const { acpCode, errorName, causeMessage, retryable, stackPreview } = diagnostics;
@@ -2606,6 +2642,15 @@ function classifyError(
     ...(stackPreview ? { stackPreview } : {}),
     ...(phase ? { phase } : {}),
   };
+  // Checked before every phase code: a quota refusal arrives as an ordinary
+  // ACP_TURN_FAILED, so classifying by phase first is exactly what buried it.
+  const quota = classifyProviderQuotaFailure([message, causeMessage]);
+  if (quota) {
+    return {
+      ...quota,
+      errorMeta: { category: "provider_quota", ...baseMeta },
+    };
+  }
   const lower = message.toLowerCase();
   const authLike = lower.includes("auth") || lower.includes("login") || lower.includes("credential");
   if (authLike) {
@@ -2675,15 +2720,21 @@ async function emitAcpxFailure(input: {
   // adapter execution timeout message instead of the raw underlying error.
   messageOverride?: string;
 }): Promise<{
-  classified: Pick<AdapterExecutionResult, "errorCode" | "errorMeta">;
+  classified: AcpxClassifiedError;
   message: string;
   childStderrTail: string | null;
 }> {
   const { ctx, prepared, err, phase, messageOverride } = input;
   const rawMessage = err instanceof Error ? err.message : String(err);
   const message = messageOverride ?? rawMessage;
-  const classified = classifyError(err, phase);
+  let classified = classifyError(err, phase);
   const childStderrTail = await readChildStderrTail({ logPath: prepared.childStderrLogPath });
+  // The CLI usually prints the limit banner to stderr and raises a generic
+  // protocol error, so the tail is often the only place the refusal is legible.
+  if (classified.errorFamily !== "provider_quota") {
+    const tailQuota = classifyProviderQuotaFailure([childStderrTail]);
+    if (tailQuota) classified = { ...tailQuota, errorMeta: classified.errorMeta };
+  }
   if (childStderrTail) {
     await ctx.onLog(
       "stderr",
@@ -3698,6 +3749,12 @@ export function createAcpxEngineExecutor(deps: AcpxEngineExecutorOptions = {}) {
           ? formatAdapterExecutionTimeoutErrorMessage(prepared.timeoutResolution)
           : resultErrorMessage(terminal);
         const terminalStopReason = terminal.status === "failed" ? terminal.error.message : terminal.stopReason;
+        // ORU-582: the turn loop reports a quota refusal as an ordinary failed
+        // terminal, which is how 161 limit failures in one day were all filed
+        // as `acpx_turn_failed` and no agent ever recovered on its own.
+        const terminalQuota = terminal.status === "failed" && !timedOut
+          ? classifyProviderQuotaFailure([terminal.error.message, errorMessage, textParts.join("")])
+          : null;
         await emitAcpxLog(ctx, {
           type: terminal.status === "completed" ? "acpx.result" : "acpx.error",
           summary: terminal.status,
@@ -3714,7 +3771,15 @@ export function createAcpxEngineExecutor(deps: AcpxEngineExecutorOptions = {}) {
           signal: timedOut ? "SIGTERM" : null,
           timedOut,
           errorMessage,
-          errorCode: terminal.status === "failed" ? "acpx_turn_failed" : timedOut ? "acpx_timeout" : null,
+          errorCode: terminalQuota
+            ? terminalQuota.errorCode
+            : terminal.status === "failed" ? "acpx_turn_failed" : timedOut ? "acpx_timeout" : null,
+          ...(terminalQuota
+            ? {
+                errorFamily: terminalQuota.errorFamily,
+                ...(terminalQuota.retryNotBefore ? { retryNotBefore: terminalQuota.retryNotBefore } : {}),
+              }
+            : {}),
           sessionId: sessionHandle.backendSessionId ?? sessionHandle.runtimeSessionName,
           sessionParams: buildSessionParams({ prepared, handle: sessionHandle }),
           sessionDisplayId: sessionHandle.agentSessionId ?? sessionHandle.backendSessionId ?? sessionHandle.runtimeSessionName,

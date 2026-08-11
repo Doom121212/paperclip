@@ -1270,6 +1270,89 @@ describe("shared ACPX engine runtime behavior", () => {
     expect(stderrLog!.text).toContain(stderrTail);
   });
 
+  /**
+   * ORU-582. A provider refusing capacity arrives here as an ordinary failed
+   * turn. The engine used to file all of them as `acpx_turn_failed`, so the
+   * server's quota-recovery contract — wait for the reset, keep the assignee,
+   * suppress takeover — never matched and the agent stayed parked in `error`
+   * until a human cleared it. 161 limit failures across 9 agents in one day
+   * carried no error family at all.
+   */
+  it("classifies a quota refusal on a failed turn as provider_quota with its reset", async () => {
+    const root = await makeTempRoot();
+    const execute = createAcpxEngineExecutor({
+      createRuntime: () => ({
+        ensureSession: async () => ({
+          backendSessionId: "backend-session",
+          agentSessionId: "agent-session",
+          runtimeSessionName: "runtime-session",
+        }),
+        startTurn: () => ({
+          events: (async function* () {})(),
+          result: Promise.resolve({
+            status: "failed" as const,
+            error: new Error("5-hour limit reached ∙ resets 10:10pm (Europe/Berlin)"),
+          }),
+          cancel: async () => {},
+        }),
+        close: async () => {},
+      }) as never,
+    });
+
+    const result = await execute({
+      runId: "run-quota-1",
+      agent: { id: "agent-1", companyId: "company-1" },
+      runtime: {},
+      config: { agent: "claude", cwd: root, stateDir: path.join(root, "state") },
+      context: {},
+      onLog: async () => {},
+      onMeta: async () => {},
+    } as never);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.errorCode).toBe("provider_quota");
+    expect(result.errorFamily).toBe("provider_quota");
+    // The reset is a wall clock in a named zone, so the exact instant depends on
+    // the day it is read; what matters is that a reset was carried at all —
+    // without it the server falls back to a blind backoff.
+    expect(new Date(result.retryNotBefore!).getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it("leaves an ordinary failed turn classified as a turn failure", async () => {
+    const root = await makeTempRoot();
+    const execute = createAcpxEngineExecutor({
+      createRuntime: () => ({
+        ensureSession: async () => ({
+          backendSessionId: "backend-session",
+          agentSessionId: "agent-session",
+          runtimeSessionName: "runtime-session",
+        }),
+        startTurn: () => ({
+          events: (async function* () {})(),
+          result: Promise.resolve({
+            status: "failed" as const,
+            error: new Error("the tool call raised TypeError"),
+          }),
+          cancel: async () => {},
+        }),
+        close: async () => {},
+      }) as never,
+    });
+
+    const result = await execute({
+      runId: "run-quota-2",
+      agent: { id: "agent-1", companyId: "company-1" },
+      runtime: {},
+      config: { agent: "claude", cwd: root, stateDir: path.join(root, "state") },
+      context: {},
+      onLog: async () => {},
+      onMeta: async () => {},
+    } as never);
+
+    expect(result.errorCode).toBe("acpx_turn_failed");
+    expect(result.errorFamily).toBeUndefined();
+  });
+
   it("configures in-process child stderr capture without forcing verbose mode", async () => {
     const root = await makeTempRoot();
     const { runtimeOptions } = await runExecutor({ agent: "custom", agentCommand: "node ./fake-acp.js", stateDir: path.join(root, "state") });

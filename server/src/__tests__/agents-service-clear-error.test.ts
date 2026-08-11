@@ -158,6 +158,52 @@ describeEmbeddedPostgres("agent service clearError", () => {
     });
   });
 
+  /**
+   * ORU-582. `PATCH {status:"idle"}` is how an operator clears a stuck agent by
+   * hand, and it used to leave `errorReason` behind: after the 11 Aug repair,
+   * four agents were running while still carrying a limit error. The UI hid it
+   * by gating the display on `status === "error"`, so anything reading the
+   * field directly — a roster health rollup, an operator API — would report a
+   * phantom outage on a healthy agent.
+   */
+  it("clears errorReason when a status patch moves the agent out of error", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "Noor",
+      role: "engineer",
+      status: "error",
+      errorReason: "session limit · resets 10:10pm (Europe/Berlin)",
+      adapterType: "claude_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+
+    const service = agentService(db);
+    expect(await service.update(agentId, { status: "idle" })).toMatchObject({
+      status: "idle",
+      errorReason: null,
+    });
+
+    // A patch that does not touch status leaves the reason alone: an agent
+    // still in error must keep saying why.
+    await db.update(agents).set({ status: "error", errorReason: "still parked" }).where(eq(agents.id, agentId));
+    expect(await service.update(agentId, { title: "Principal Architect" })).toMatchObject({
+      status: "error",
+      errorReason: "still parked",
+    });
+  });
+
   it("rejects non-error agents with a 409 conflict", async () => {
     const companyId = randomUUID();
     const agentId = randomUUID();

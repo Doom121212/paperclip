@@ -1065,6 +1065,14 @@ export async function startServer(): Promise<StartedServer> {
           }
         }
 
+        // A restart is the other way an agent ends up latched in `error`
+        // ("Process lost -- server may have restarted"), so the self-heal runs
+        // on the startup path too, before work is dispatched.
+        const healed = await heartbeat.sweepRecoverableAgentErrors();
+        if (healed.cleared > 0) {
+          logger.warn({ ...healed }, "startup agent error self-heal returned parked agents to idle");
+        }
+
         const promotion = await heartbeat.promoteDueScheduledRetries();
         await heartbeat.resumeQueuedRuns();
         const reconciled = await heartbeat.reconcileStrandedAssignedIssues();
@@ -1267,6 +1275,15 @@ export async function startServer(): Promise<StartedServer> {
           // persisted queued work is still being driven forward.
           trackHeartbeatSchedulerWork(heartbeat
             .reapOrphanedRuns({ staleThresholdMs: 5 * 60 * 1000 })
+            // Unlatch agents parked in `error` on a condition that is over
+            // (quota reset passed, process lost) before the stranded-issue pass
+            // below, so a recovered agent is dispatched work in the same tick.
+            .then(async () => {
+              const healed = await heartbeat.sweepRecoverableAgentErrors();
+              if (healed.cleared > 0) {
+                logger.warn({ ...healed }, "periodic agent error self-heal returned parked agents to idle");
+              }
+            })
             .then(() => heartbeat.promoteDueScheduledRetries())
             .then(async (promotion) => {
               await heartbeat.resumeQueuedRuns();

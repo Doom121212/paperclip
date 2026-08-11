@@ -512,6 +512,14 @@ export function agentService(db: Db) {
     }
 
     const normalizedPatch = { ...data } as Partial<typeof agents.$inferInsert>;
+    // ORU-582: `errorReason` is only meaningful while the agent is in `error`.
+    // Clearing an agent by hand (`PATCH {status:"idle"}`) used to leave the
+    // stale reason behind, so anything reading the field directly — a roster
+    // health rollup, an operator API — saw a phantom outage on a healthy agent.
+    // The UI only hid it by gating the display on `status === "error"`.
+    if (data.status !== undefined && data.status !== "error" && data.errorReason === undefined) {
+      normalizedPatch.errorReason = null;
+    }
     if (data.permissions !== undefined) {
       const role = (data.role ?? existing.role) as string;
       normalizedPatch.permissions = normalizeAgentPermissions(data.permissions, role);

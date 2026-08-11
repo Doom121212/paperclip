@@ -234,7 +234,12 @@ import {
   recoveryAssigneeAdapterOverrides,
   withRecoveryModelProfileHint,
 } from "./recovery/model-profile-hint.js";
-import { ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS as RECOVERY_ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS, recoveryService } from "./recovery/service.js";
+import {
+  ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS as RECOVERY_ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS,
+  PROVIDER_QUOTA_RECOVERY_DEFAULT_BACKOFF_MS,
+  recoveryService,
+} from "./recovery/service.js";
+import { classifyAgentErrorForSelfHeal } from "./recovery/agent-error-self-heal.js";
 import {
   buildIssueReviewPathLostIdempotencyKey,
   decideIssueReviewPathRecovery,
@@ -13313,6 +13318,100 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     return recovery.sweepStaleIssueLocks();
   }
 
+  /**
+   * ORU-582. Return agents latched in `error` to `idle` once the condition that
+   * parked them is over — a quota reset that has passed, or a lost process.
+   * `finalizeAgentStatus` sets `error` and nothing ever re-read it, so the gap
+   * between "the limit cleared" and "the agent works again" was unbounded and
+   * ended only when a human happened to look.
+   *
+   * Runs on the periodic recovery tick ahead of the stranded-issue
+   * reconciliation, so a recovered agent is dispatched work in the same pass.
+   * `classifyAgentErrorForSelfHeal` holds the decision and its reasoning.
+   */
+  async function sweepRecoverableAgentErrors(now = new Date()) {
+    const parked = await db
+      .select({ agent: agents })
+      .from(agents)
+      .innerJoin(companies, eq(agents.companyId, companies.id))
+      .where(and(eq(agents.status, "error"), eq(companies.status, "active")))
+      .then((rows) => rows.map((row) => row.agent));
+
+    const cleared: Array<{ agentId: string; reason: string }> = [];
+    const held: Array<{ agentId: string; reason: string }> = [];
+
+    for (const agent of parked) {
+      // A run that started since the latch was set means the agent is not
+      // actually down; leave it to `finalizeAgentStatus` to settle.
+      if ((await countRunningRunsForAgent(agent.id)) > 0) continue;
+
+      const latestRun = await db
+        .select()
+        .from(heartbeatRuns)
+        .where(eq(heartbeatRuns.agentId, agent.id))
+        .orderBy(desc(heartbeatRuns.createdAt))
+        .limit(1)
+        .then((rows) => rows[0] ?? null);
+
+      const verdict = classifyAgentErrorForSelfHeal({
+        errorReason: agent.errorReason ?? null,
+        latestRun: latestRun
+          ? {
+              error: latestRun.error ?? null,
+              errorCode: latestRun.errorCode ?? null,
+              errorFamily: readHeartbeatRunErrorFamily(latestRun),
+              retryNotBefore: readTransientRetryNotBeforeFromRun(latestRun),
+              finishedAt: latestRun.finishedAt ? new Date(latestRun.finishedAt) : null,
+            }
+          : null,
+        now,
+        defaultQuotaBackoffMs: PROVIDER_QUOTA_RECOVERY_DEFAULT_BACKOFF_MS,
+      });
+      if (!verdict.recoverable) {
+        held.push({ agentId: agent.id, reason: verdict.reason });
+        continue;
+      }
+
+      // Conditional on `status` so a concurrent transition (pause, terminate, a
+      // run starting) wins rather than being overwritten by this sweep.
+      const updated = await db
+        .update(agents)
+        .set({ status: "idle", errorReason: null, updatedAt: now })
+        .where(and(eq(agents.id, agent.id), eq(agents.status, "error")))
+        .returning()
+        .then((rows) => rows[0] ?? null);
+      if (!updated) continue;
+
+      cleared.push({ agentId: agent.id, reason: verdict.reason });
+      logger.warn(
+        {
+          agentId: agent.id,
+          agentName: agent.name,
+          recoveryReason: verdict.reason,
+          retryAt: verdict.retryAt?.toISOString() ?? null,
+          parkedReason: agent.errorReason,
+          latestRunId: latestRun?.id ?? null,
+          latestRunErrorCode: latestRun?.errorCode ?? null,
+        },
+        "agent error self-heal returned a parked agent to idle",
+      );
+      publishLiveEvent({
+        companyId: updated.companyId,
+        type: "agent.status",
+        payload: {
+          agentId: updated.id,
+          status: updated.status,
+          lastHeartbeatAt: updated.lastHeartbeatAt
+            ? new Date(updated.lastHeartbeatAt).toISOString()
+            : null,
+          outcome: `self_healed_${verdict.reason}`,
+        },
+      });
+    }
+
+    return { scanned: parked.length, cleared: cleared.length, clearedAgents: cleared, held };
+  }
+
   function issueIdFromRunContext(contextSnapshot: unknown) {
     const context = parseObject(contextSnapshot);
     return readNonEmptyString(context.issueId) ?? readNonEmptyString(context.taskId);
@@ -18972,6 +19071,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     terminalizeRunOnLeaseRelease,
 
     sweepStaleIssueLocks,
+
+    sweepRecoverableAgentErrors,
 
     buildIssueGraphLivenessAutoRecoveryPreview,
 
