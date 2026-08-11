@@ -10,6 +10,9 @@ import {
 function counterDb(
   initialCount = 0,
   runOverrides: Record<string, unknown> | null = {},
+  // Whether the target issue's checkout/execution lock is held by this run.
+  // The real predicate is exercised against PostgreSQL in the sibling suite.
+  holdsTargetLock = false,
 ) {
   let observedCount = initialCount;
   const inserted: Array<Record<string, unknown>> = [];
@@ -20,6 +23,12 @@ function counterDb(
           if (Object.keys(selection).includes("count")) {
             return {
               then: (resolve: (rows: unknown[]) => unknown) => resolve([{ count: observedCount }]),
+            };
+          }
+          if (!Object.keys(selection).includes("contextSnapshot")) {
+            return {
+              then: (resolve: (rows: unknown[]) => unknown) =>
+                resolve(holdsTargetLock ? [{ id: "55555555-5555-4555-8555-555555555555" }] : []),
             };
           }
           return {
@@ -175,7 +184,25 @@ describe("cross-issue influence limit rollout", () => {
     expect(fake.inserted).toEqual([]);
   });
 
-  it("fails closed when the persisted run has no source issue", async () => {
+  // ORU-596. A timer-woken or recovered run has an empty context snapshot and
+  // acquires its issue afterwards, by checkout. Without the lock fallback the
+  // guard reads that as "every issue is cross-issue" and the assignee cannot
+  // comment on, or update, the issue it is holding.
+  it("treats the issue a context-less run holds the lock on as its own issue", async () => {
+    const fake = counterDb(0, { contextSnapshot: {} }, true);
+
+    await expect(observeCrossIssueInfluence(fake.db as never, {
+      companyId: "22222222-2222-4222-8222-222222222222",
+      runId: "11111111-1111-4111-8111-111111111111",
+      agentId: "33333333-3333-4333-8333-333333333333",
+      targetIssueId: "55555555-5555-4555-8555-555555555555",
+      kind: "comment",
+    })).resolves.toBeNull();
+    // In-scope, so it neither consumes the cap nor logs an influence.
+    expect(fake.inserted).toEqual([]);
+  });
+
+  it("fails closed when a run with no source issue holds no lock on the target", async () => {
     const fake = counterDb(0, { contextSnapshot: {} });
 
     await expect(observeCrossIssueInfluence(fake.db as never, {

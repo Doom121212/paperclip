@@ -1,6 +1,6 @@
-import { and, count, eq } from "drizzle-orm";
+import { and, count, eq, or } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { activityLog, heartbeatRuns } from "@paperclipai/db";
+import { activityLog, heartbeatRuns, issues } from "@paperclipai/db";
 import { isUuidLike, issueWriteDenialResponse } from "@paperclipai/shared";
 import { forbidden } from "../errors.js";
 import { logger } from "../middleware/logger.js";
@@ -104,7 +104,33 @@ export async function observeCrossIssueInfluence(
     }
 
     const sourceIssueId = readRunSourceIssueId(run.contextSnapshot);
-    if (!sourceIssueId) throw crossIssueInfluenceRunContextError();
+    if (!sourceIssueId) {
+      // ORU-596. A run does not always wake *on* an issue and then acquire one:
+      // a recovered agent, or any agent woken by the plain heartbeat timer,
+      // starts with an empty context and picks its work off the board. Its
+      // context snapshot is written at wake time and never learns about the
+      // checkout that followed, so deriving scope from the snapshot alone reads
+      // "no source issue" as "every issue is cross-issue" — including the one
+      // this run holds the execution lock on. That denied the assignee the two
+      // writes the board actually watches, comments and status.
+      //
+      // The lock is the missing half of the scope, not an exemption from it:
+      // the run gets exactly the one issue it checked out, and every other
+      // issue stays cross-issue and stays counted. A run that holds no lock on
+      // the target still fails closed, which is the whole population the guard
+      // was written for.
+      const holdsTargetLock = await tx
+        .select({ id: issues.id })
+        .from(issues)
+        .where(and(
+          eq(issues.id, input.targetIssueId),
+          eq(issues.companyId, input.companyId),
+          or(eq(issues.checkoutRunId, input.runId), eq(issues.executionRunId, input.runId)),
+        ))
+        .then((rows) => rows.length > 0);
+      if (!holdsTargetLock) throw crossIssueInfluenceRunContextError();
+      return null;
+    }
     if (
       sourceIssueId === input.targetIssueId ||
       (input.targetIssueIdentifier && sourceIssueId.toUpperCase() === input.targetIssueIdentifier.toUpperCase())
