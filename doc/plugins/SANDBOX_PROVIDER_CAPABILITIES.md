@@ -61,7 +61,8 @@ states:
 - **Omitted** — the host defers to verified worker discovery. The capability is
   effective when the worker advertises the required methods and no narrowing
   removes it. Omission is the correct default for a provider that follows the
-  standard method contract.
+  standard method contract. `reusableLeases` is the one exception: an omitted
+  `reusableLeases` key never grants reusable leases (see the next section).
 - **`false`** — the host narrows the capability to off. The capability is never
   effective, even when the worker advertises the required methods.
 - **`true`** — the host still requires the verified prerequisites. A `true`
@@ -69,10 +70,26 @@ states:
   host present the capability, but the worker must still advertise the required
   methods.
 
-## The nested declaration overrides the legacy flag
+## Reusable leases need an explicit opt-in
 
-The driver declaration keeps one legacy field, `supportsReusableLeases`, for
-backward compatibility. The host folds it into `sandboxCapabilities.reusableLeases`.
+Reusable leases are the exception to the omission rule above. The host grants
+reusable-lease acquisition only when the declaration sets `reusableLeases` to
+`true`. The provider opts in through one of two fields:
+
+- the nested `sandboxCapabilities.reusableLeases: true`, or
+- the legacy `supportsReusableLeases: true`.
+
+An omitted key leaves `reusableLeases` unset. An unset key does not make the
+provider eligible for reusable-lease acquisition, and it does not advertise
+provider-level reusable support. The host then always creates an ephemeral lease.
+
+The opt-in never removes the other prerequisites. The worker must still verify
+both `environmentResumeLease` and `environmentReleaseLease`, and per-run narrowing
+still applies.
+
+The two opt-in fields have a fixed precedence. The host keeps the legacy
+`supportsReusableLeases` field for backward compatibility, and it folds the field
+into `sandboxCapabilities.reusableLeases`.
 
 - When only `supportsReusableLeases` is present, the host reads it as
   `reusableLeases`.
