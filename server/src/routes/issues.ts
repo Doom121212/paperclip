@@ -4094,7 +4094,25 @@ export function issueRoutes(
       return false;
     }
     if (await assertLowTrustControlPlaneDenied(req, res, issue.companyId, issue)) return false;
-    if (!(await assertAgentIssueMutationAllowed(req, res, issue))) return false;
+    // An addressed interaction is a question put to *this* agent, so answering it
+    // is a write on the interaction, not on the issue it happens to sit on. Without
+    // this the generic assignee-ownership boundary below answers 403 first and the
+    // addressee-aware check further down is unreachable: a re-routed ask can then
+    // only be resolved by the agent who owns the card — by construction the agent
+    // who asked, not the one asked (ORU-1032). `allowVisibleIssueWrite` is the same
+    // default-open channel that interaction *create* and comments already use, and
+    // it is granted here only to the addressee; the run lock on an in_progress
+    // issue, the resolver-policy gate, and every other issue mutation stay as they
+    // were. `assertAgentInteractionActorAllowed` below still enforces
+    // addressee-only, no-self-resolution, and no-same-run resolution.
+    const actorIsAddressee = !!interaction.addresseeAgentId
+      && interaction.addresseeAgentId === actorAgentId;
+    if (!(await assertAgentIssueMutationAllowed(
+      req,
+      res,
+      issue,
+      { allowVisibleIssueWrite: actorIsAddressee },
+    ))) return false;
     const isReviewConfirmationVerdict = await isPendingReviewConfirmationVerdict(issue, interaction);
     const payload = interaction.payload && typeof interaction.payload === "object"
       ? interaction.payload as { toolAction?: unknown }

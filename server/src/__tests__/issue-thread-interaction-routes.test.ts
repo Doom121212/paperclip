@@ -31,6 +31,26 @@ const mockHeartbeatService = vi.hoisted(() => ({
   wakeup: vi.fn(async () => undefined),
 }));
 const mockResolveTaskWatchdogMutationScope = vi.hoisted(() => vi.fn(async () => ({ kind: "none" })));
+const defaultAccessDecide = vi.hoisted(() => async (input: { action?: string }) => ({
+  allowed: true,
+  action: input.action,
+  reason: "allow_explicit_grant",
+  explanation: "Allowed by test grant.",
+}));
+const mockAccessDecide = vi.hoisted(() => vi.fn(defaultAccessDecide));
+/**
+ * The blanket allow above also grants `tasks:manage_active_checkouts`, which is
+ * the override that lets any agent mutate any agent's issue. Tests that assert
+ * on the assignee-ownership boundary itself have to drop it, or the boundary is
+ * never reached (ORU-1032 shipped precisely because nothing here dropped it).
+ */
+const withoutCheckoutManagementOverride = vi.hoisted(() => () => {
+  mockAccessDecide.mockImplementation(async (input: { action?: string }) => (
+    input.action === "tasks:manage_active_checkouts"
+      ? { allowed: false, action: input.action, reason: "deny_no_grant", explanation: "Denied by test." }
+      : defaultAccessDecide(input)
+  ));
+});
 const mockResolveCoreTrustPreset = vi.hoisted(() => vi.fn(() => ({ kind: "standard" })));
 
 const mockLogActivity = vi.hoisted(() => vi.fn(async () => undefined));
@@ -77,12 +97,7 @@ function registerModuleMocks() {
     }),
     accessService: () => ({
       canUser: vi.fn(async () => true),
-      decide: vi.fn(async (input: { action?: string }) => ({
-        allowed: true,
-        action: input.action,
-        reason: "allow_explicit_grant",
-        explanation: "Allowed by test grant.",
-      })),
+      decide: mockAccessDecide,
       hasPermission: vi.fn(async () => true),
     }),
     agentService: () => ({
@@ -204,6 +219,7 @@ describe.sequential("issue thread interaction routes", () => {
     vi.doUnmock("../services/index.js");
     registerModuleMocks();
     vi.clearAllMocks();
+    mockAccessDecide.mockImplementation(defaultAccessDecide);
     mockResolveTaskWatchdogMutationScope.mockResolvedValue({ kind: "none" });
     mockResolveCoreTrustPreset.mockReturnValue({ kind: "standard" });
     mockIssueService.getById.mockResolvedValue(createIssue());
@@ -2025,6 +2041,101 @@ describe.sequential("issue thread interaction routes", () => {
       .post("/api/issues/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/interactions/interaction-addressed/respond")
       .send({ answers: [] });
     expect(board.status).toBe(200);
+  });
+
+  it("lets the addressed agent resolve an interaction on another agent's idle issue", async () => {
+    withoutCheckoutManagementOverride();
+    const addressed = {
+      id: "interaction-addressed-foreign",
+      kind: "ask_user_questions",
+      status: "pending",
+      createdByAgentId: CREATED_AGENT_ID,
+      addresseeAgentId: UNRELATED_AGENT_ID,
+      sourceRunId: "run-1",
+      requestedResolverPolicy: "board_or_agents",
+      effectiveResolverPolicy: "board_or_agents",
+      payload: { version: 1, questions: [] },
+    };
+    mockInteractionService.getForIssue.mockResolvedValue(addressed);
+    mockIssueService.getById.mockResolvedValue(createIssue({
+      status: "in_review",
+      assigneeAgentId: ASSIGNEE_AGENT_ID,
+    }));
+
+    const addresseeApp = await createApp({
+      type: "agent",
+      agentId: UNRELATED_AGENT_ID,
+      companyId: "company-1",
+      runId: "run-2",
+    });
+    const addressee = await request(addresseeApp)
+      .post("/api/issues/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/interactions/interaction-addressed-foreign/respond")
+      .send({ answers: [] });
+    expect(addressee.status).toBe(200);
+    expect(mockInteractionService.answerQuestions).toHaveBeenCalled();
+  });
+
+  it("still holds the assignee run lock against the addressed agent while the issue is in progress", async () => {
+    withoutCheckoutManagementOverride();
+    mockInteractionService.getForIssue.mockResolvedValue({
+      id: "interaction-addressed-locked",
+      kind: "ask_user_questions",
+      status: "pending",
+      createdByAgentId: CREATED_AGENT_ID,
+      addresseeAgentId: UNRELATED_AGENT_ID,
+      sourceRunId: "run-1",
+      requestedResolverPolicy: "board_or_agents",
+      effectiveResolverPolicy: "board_or_agents",
+      payload: { version: 1, questions: [] },
+    });
+    mockIssueService.getById.mockResolvedValue(createIssue({
+      status: "in_progress",
+      assigneeAgentId: ASSIGNEE_AGENT_ID,
+    }));
+
+    const res = await request(await createApp({
+      type: "agent",
+      agentId: UNRELATED_AGENT_ID,
+      companyId: "company-1",
+      runId: "run-2",
+    }))
+      .post("/api/issues/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/interactions/interaction-addressed-locked/respond")
+      .send({ answers: [] });
+    // 409, not 403: the run lock is a conflict that clears on its own when the
+    // assignee's run ends, and the addressee can answer then.
+    expect(res.status).toBe(409);
+    expect(mockInteractionService.answerQuestions).not.toHaveBeenCalled();
+  });
+
+  it("does not widen resolution to non-addressees on another agent's issue", async () => {
+    withoutCheckoutManagementOverride();
+    mockInteractionService.getForIssue.mockResolvedValue({
+      id: "interaction-unaddressed-foreign",
+      kind: "ask_user_questions",
+      status: "pending",
+      createdByAgentId: CREATED_AGENT_ID,
+      addresseeAgentId: null,
+      sourceRunId: "run-1",
+      requestedResolverPolicy: "board_or_agents",
+      effectiveResolverPolicy: "board_or_agents",
+      payload: { version: 1, questions: [] },
+    });
+    mockIssueService.getById.mockResolvedValue(createIssue({
+      status: "in_review",
+      assigneeAgentId: ASSIGNEE_AGENT_ID,
+    }));
+
+    const res = await request(await createApp({
+      type: "agent",
+      agentId: UNRELATED_AGENT_ID,
+      companyId: "company-1",
+      runId: "run-2",
+    }))
+      .post("/api/issues/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/interactions/interaction-unaddressed-foreign/respond")
+      .send({ answers: [] });
+    expect(res.status).toBe(403);
+    expect(res.body.error).toContain("another agent's issue");
+    expect(mockInteractionService.answerQuestions).not.toHaveBeenCalled();
   });
 
   it("blocks creator-agent self-resolution", async () => {
