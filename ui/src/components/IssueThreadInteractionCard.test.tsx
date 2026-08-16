@@ -1136,6 +1136,7 @@ describe("IssueThreadInteractionCard secret-proposal card", () => {
 
     expect(host.textContent).toContain("Secret binding requested");
     expect(host.textContent).toContain("OpenAI API key");
+    expect((host.textContent ?? "").split("OpenAI API key")).toHaveLength(2);
     expect(host.textContent).toContain("access.evals_openai_api_key");
     expect(host.textContent).toContain("EvalsEngineer");
     expect(host.textContent).toContain("Reason given by the agent");
@@ -1157,6 +1158,10 @@ describe("IssueThreadInteractionCard secret-proposal card", () => {
     const actions = host.querySelector('[data-testid="confirmation-actions"]');
     expect(actions?.getAttribute("data-mobile-layout")).toBe("stacked");
     expect(actions?.classList.contains("grid-cols-2")).toBe(true);
+    const configPath = Array.from(host.querySelectorAll("dd")).find((node) =>
+      node.textContent === "access.evals_openai_api_key"
+    );
+    expect(configPath?.parentElement?.classList.contains("sm:col-span-2")).toBe(true);
 
     const approve = Array.from(host.querySelectorAll("button")).find((button) =>
       button.textContent?.includes("Approve & bind"),

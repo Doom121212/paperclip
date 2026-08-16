@@ -2031,10 +2031,8 @@ function secretProposalStatusClasses(state: SecretProposalCardState) {
 }
 
 function SecretProposalIdentityHeader({
-  payload,
   state,
 }: {
-  payload: NonNullable<RequestConfirmationInteraction["payload"]["secretProposal"]>;
   state: SecretProposalCardState;
 }) {
   const dimmed = state === "declined" || state === "expired";
@@ -2050,9 +2048,6 @@ function SecretProposalIdentityHeader({
         <div className="text-base font-bold leading-tight text-foreground">
           Bind an existing secret
         </div>
-        <div className="mt-1 truncate font-mono text-(length:--text-compact) text-muted-foreground">
-          {payload.sourceSecretLabel}
-        </div>
       </div>
     </div>
   );
@@ -2064,7 +2059,7 @@ function SecretProposalDetails({
   payload: NonNullable<RequestConfirmationInteraction["payload"]["secretProposal"]>;
 }) {
   return (
-    <dl className="grid gap-3 rounded-sm border border-border/70 bg-muted/30 p-3 sm:grid-cols-3">
+    <dl className="grid gap-3 rounded-sm border border-border/70 bg-muted/30 p-3 sm:grid-cols-2">
       <div className="min-w-0 space-y-1">
         <dt className="text-(length:--text-micro) font-semibold uppercase tracking-(--tracking-eyebrow) text-muted-foreground">
           Source secret
@@ -2073,15 +2068,15 @@ function SecretProposalDetails({
       </div>
       <div className="min-w-0 space-y-1">
         <dt className="text-(length:--text-micro) font-semibold uppercase tracking-(--tracking-eyebrow) text-muted-foreground">
-          New config path
-        </dt>
-        <dd className="break-all font-mono text-sm text-foreground">{payload.configPath}</dd>
-      </div>
-      <div className="min-w-0 space-y-1">
-        <dt className="text-(length:--text-micro) font-semibold uppercase tracking-(--tracking-eyebrow) text-muted-foreground">
           Target agent
         </dt>
         <dd className="truncate text-sm font-medium text-foreground">{payload.targetAgentName}</dd>
+      </div>
+      <div className="min-w-0 space-y-1 sm:col-span-2">
+        <dt className="text-(length:--text-micro) font-semibold uppercase tracking-(--tracking-eyebrow) text-muted-foreground">
+          New config path
+        </dt>
+        <dd className="break-all font-mono text-sm text-foreground">{payload.configPath}</dd>
       </div>
     </dl>
   );
@@ -2245,7 +2240,7 @@ function RequestSecretProposalCard({
 
   return (
     <div className="space-y-4">
-      <SecretProposalIdentityHeader payload={payload} state={state} />
+      <SecretProposalIdentityHeader state={state} />
       <SecretProposalDetails payload={payload} />
       <ProposalJustification justification={payload.justification} />
       <div className="flex items-center gap-2 text-(length:--text-micro) text-muted-foreground">
