@@ -1149,6 +1149,15 @@ describe("IssueThreadInteractionCard secret-proposal card", () => {
     );
     expect(host.textContent?.toLowerCase()).not.toContain("fingerprint");
 
+    const statusBadge = host.querySelector('[data-testid="interaction-status-badge"]');
+    expect(statusBadge?.querySelector(".flex-col")?.textContent).toBe(
+      "Secret binding/Awaiting approval",
+    );
+    expect(statusBadge?.querySelector(".hidden")?.textContent).toBe("/");
+    const actions = host.querySelector('[data-testid="confirmation-actions"]');
+    expect(actions?.getAttribute("data-mobile-layout")).toBe("stacked");
+    expect(actions?.classList.contains("grid-cols-2")).toBe(true);
+
     const approve = Array.from(host.querySelectorAll("button")).find((button) =>
       button.textContent?.includes("Approve & bind"),
     );

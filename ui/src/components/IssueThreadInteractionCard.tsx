@@ -2269,6 +2269,7 @@ function RequestSecretProposalCard({
           canReject={Boolean(onRejectInteraction)}
           onApprove={() => void handleAccept()}
           onReject={(reason) => void handleReject(reason)}
+          stackActionsOnMobile
         />
       ) : (
         <SecretProposalResolution
@@ -2321,6 +2322,7 @@ function ConfirmationActionRow({
   composeReason,
   extraReasonSatisfied = false,
   revisePanelChildren,
+  stackActionsOnMobile = false,
 }: {
   /** Changing this (interaction id + status) collapses the revise panel and
    * clears its draft text — the row is reused across interaction updates. */
@@ -2348,6 +2350,9 @@ function ConfirmationActionRow({
   extraReasonSatisfied?: boolean;
   /** Extra affordances rendered inside the revise panel (e.g. screenshot attach). */
   revisePanelChildren?: ReactNode;
+  /** Give domain cards with longer action labels an intentional narrow-screen
+   * hierarchy instead of relying on opportunistic flex wrapping. */
+  stackActionsOnMobile?: boolean;
 }) {
   const [revising, setRevising] = useState(false);
   const [reason, setReason] = useState("");
@@ -2371,14 +2376,19 @@ function ConfirmationActionRow({
   return (
     <div className="space-y-3">
       <div
+        data-testid="confirmation-actions"
+        data-mobile-layout={stackActionsOnMobile ? "stacked" : "inline"}
         className={cn(
-          "flex flex-wrap items-center justify-end gap-2",
+          stackActionsOnMobile
+            ? "grid grid-cols-2 items-stretch gap-2 sm:flex sm:flex-wrap sm:items-center sm:justify-end"
+            : "flex flex-wrap items-center justify-end gap-2",
           primaryActionOnRight && "flex-row-reverse justify-start",
         )}
       >
         <Button
           size="sm"
           variant={revising ? "outline" : approveVariant}
+          className={stackActionsOnMobile ? "col-span-2 w-full sm:col-auto sm:w-auto" : undefined}
           disabled={!canApprove || working !== null || approveDisabled}
           onClick={onApprove}
         >
@@ -2395,6 +2405,7 @@ function ConfirmationActionRow({
           <Button
             size="sm"
             variant="outline"
+            className={stackActionsOnMobile ? "w-full sm:w-auto" : undefined}
             disabled={!canReject || working !== null}
             onClick={() => {
               setAttempted(false);
@@ -2408,6 +2419,7 @@ function ConfirmationActionRow({
           <Button
             size="sm"
             variant="ghost"
+            className={stackActionsOnMobile ? "w-full sm:w-auto" : undefined}
             disabled={!canReject || working !== null}
             onClick={() => onReject(undefined)}
           >
@@ -3640,15 +3652,27 @@ export function IssueThreadInteractionCard({
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0 flex-1 basis-64">
             <div className="flex flex-wrap items-center gap-2">
-              <span className={cn("inline-flex items-center gap-1 rounded-sm border px-2.5 py-1 text-(length:--text-micro) font-semibold uppercase tracking-(--tracking-eyebrow)", styles.badge)}>
+              <span
+                data-testid="interaction-status-badge"
+                className={cn(
+                  "inline-flex items-center gap-1 rounded-sm border px-2.5 py-1 text-(length:--text-micro) font-semibold uppercase tracking-(--tracking-eyebrow)",
+                  styles.badge,
+                )}
+              >
                 <StatusIcon className={cn("h-3.5 w-3.5", iconSpin && "animate-spin")} />
-                {isPlan
-                  ? "Plan"
-                  : isSecretProposal
-                    ? "Secret binding"
-                    : interactionKindLabel(interaction.kind)}
-                <span className="text-current/60">/</span>
-                {statusText}
+                {isSecretProposal ? (
+                  <span className="flex flex-col sm:flex-row sm:items-center sm:gap-1">
+                    <span>Secret binding</span>
+                    <span className="hidden text-current/60 sm:inline">/</span>
+                    <span>{statusText}</span>
+                  </span>
+                ) : (
+                  <>
+                    {isPlan ? "Plan" : interactionKindLabel(interaction.kind)}
+                    <span className="text-current/60">/</span>
+                    {statusText}
+                  </>
+                )}
               </span>
               {addresseeLabel ? (
                 <Tooltip>
