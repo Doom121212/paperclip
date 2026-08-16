@@ -1580,14 +1580,11 @@ export function issueThreadInteractionService(db: Db, opts: IssueThreadInteracti
 
     const now = new Date();
     const result = await db.transaction(async (tx) => {
-      // Secret proposal lifecycle writes use proposal -> issue -> interaction.
-      // Take the optional proposal lock first so execution-result recording
-      // cannot deadlock with this verdict while touching the issue receipt.
-      await lockLinkedSecretProposal(tx as unknown as Db, args.current);
-
       // Policy mutations and review transitions use the same issue-row lock,
       // so the authoritative review policy and requester are stable through
-      // the verdict write.
+      // the verdict write. Terminal issue transitions also lock the issue
+      // before expiring linked proposals, so keep issue -> proposal ->
+      // interaction as the shared lifecycle order.
       const issueContext = await tx
         .select({
           id: issues.id,
@@ -1607,6 +1604,8 @@ export function issueThreadInteractionService(db: Db, opts: IssueThreadInteracti
       if (!issueContext || issueContext.companyId !== args.issue.companyId) {
         throw notFound("Issue not found");
       }
+
+      await lockLinkedSecretProposal(tx as unknown as Db, args.current);
 
       const lockedCurrent = await tx
         .select()
@@ -1750,11 +1749,6 @@ export function issueThreadInteractionService(db: Db, opts: IssueThreadInteracti
 
     const now = new Date();
     const updated = await db.transaction(async (tx) => {
-      // Keep the same proposal -> issue -> interaction order used by acceptance
-      // and execution-result recording. In particular, do not hold the issue
-      // row while waiting for a concurrent proposal execution to finish.
-      await lockLinkedSecretProposal(tx as unknown as Db, args.current);
-
       const issueContext = await tx
         .select({
           id: issues.id,
@@ -1773,6 +1767,11 @@ export function issueThreadInteractionService(db: Db, opts: IssueThreadInteracti
       if (!issueContext || issueContext.companyId !== args.issue.companyId) {
         throw notFound("Issue not found");
       }
+
+      // Terminal issue transitions expire linked proposals while holding this
+      // issue row. Match their issue -> proposal -> interaction order so a
+      // close/cancel race cannot invert the first two locks.
+      await lockLinkedSecretProposal(tx as unknown as Db, args.current);
 
       const lockedCurrent = await tx
         .select()
@@ -2022,6 +2021,20 @@ export function issueThreadInteractionService(db: Db, opts: IssueThreadInteracti
       execution: { status: "executed" | "failed"; errorCode?: string | null },
     ) => {
       const updated = await db.transaction(async (tx) => {
+        // Verdict and terminal-transition paths lock issue -> proposal ->
+        // interaction. Take the same order before recording the receipt so a
+        // concurrent rejection or issue close cannot deadlock here.
+        const lockedIssue = await tx
+          .select({ id: issues.id })
+          .from(issues)
+          .where(and(
+            eq(issues.id, issue.id),
+            eq(issues.companyId, issue.companyId),
+          ))
+          .for("update")
+          .then((rows) => rows[0] ?? null);
+        if (!lockedIssue) throw notFound("Issue not found");
+
         const proposal = await tx
           .select()
           .from(companySecretProposals)
