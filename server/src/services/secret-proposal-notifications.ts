@@ -1,7 +1,9 @@
 import { logger } from "../middleware/logger.js";
-import type { heartbeatService } from "./heartbeat.js";
 import type { issueService } from "./issues.js";
-import { queueIssueAssignmentWakeup } from "./issue-assignment-wakeup.js";
+import {
+  queueIssueAssignmentWakeup,
+  type IssueAssignmentWakeupDeps,
+} from "./issue-assignment-wakeup.js";
 
 type ProposalResolutionNotification = {
   originIssueId: string | null;
@@ -16,7 +18,7 @@ export async function notifySecretProposalResolution(input: {
   userId: string;
   reason?: string | null;
   issues: Pick<ReturnType<typeof issueService>, "getById" | "addComment">;
-  heartbeat: Pick<ReturnType<typeof heartbeatService>, "wakeup">;
+  heartbeat: IssueAssignmentWakeupDeps;
 }) {
   if (!input.proposal.originIssueId) return;
   try {
