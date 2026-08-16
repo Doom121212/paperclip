@@ -985,6 +985,58 @@ describeEmbeddedPostgres("secret proposal routes", () => {
       })]);
   });
 
+  it("keeps proposal and card consistent when approval races card rejection", async () => {
+    const fixture = await seedRun();
+    const liveSecret = await secretService(db).create(fixture.companyId, {
+      name: "dev/card-race/source",
+      key: "CARD_RACE_SOURCE",
+      provider: "local_encrypted",
+      value: "card-race-secret",
+    });
+    const proposed = await request(createAgentApp(fixture))
+      .post("/api/agents/me/secret-proposals")
+      .send({
+        kind: "binding",
+        secretId: liveSecret.id,
+        configPath: "access.CARD_RACE_ALIAS",
+        justification: "Exercise proposal and card lock ordering",
+      });
+    expect(proposed.status).toBe(201);
+
+    const [approval, rejection] = await Promise.allSettled([
+      request(createBoardApp(fixture))
+        .post(`/api/companies/${fixture.companyId}/secret-proposals/${proposed.body.id}/approve`)
+        .send({}),
+      issueThreadInteractionService(db).rejectInteraction(
+        { id: fixture.issueId, companyId: fixture.companyId, status: "in_progress" },
+        proposed.body.interactionId,
+        { reason: "Reject the racing request" },
+        { userId: "board-user" },
+      ),
+    ]);
+    expect(approval.status).toBe("fulfilled");
+    if (approval.status !== "fulfilled") throw approval.reason;
+    expect([200, 409]).toContain(approval.value.status);
+    expect(rejection.status).toBe(approval.value.status === 200 ? "rejected" : "fulfilled");
+
+    const [proposal] = await db.select().from(companySecretProposals)
+      .where(eq(companySecretProposals.id, proposed.body.id));
+    const [card] = await db.select().from(issueThreadInteractions)
+      .where(eq(issueThreadInteractions.id, proposed.body.interactionId));
+    if (proposal!.status === "approved") {
+      expect(card).toMatchObject({
+        status: "accepted",
+        result: { secretProposal: { status: "executed" } },
+      });
+    } else {
+      expect(proposal).toMatchObject({ status: "rejected" });
+      expect(card).toMatchObject({
+        status: "rejected",
+        result: { secretProposal: { status: "rejected" } },
+      });
+    }
+  });
+
   it("denies direct and cascade approval after a proposal expires", async () => {
     const fixture = await seedRun();
     const secretProposal = await request(createAgentApp(fixture))

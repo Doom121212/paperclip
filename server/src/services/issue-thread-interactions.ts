@@ -1586,6 +1586,22 @@ export function issueThreadInteractionService(db: Db, opts: IssueThreadInteracti
         throw notFound("Issue not found");
       }
 
+      const secretProposalId = linkedSecretProposalId(args.current);
+      if (secretProposalId) {
+        // Proposal resolution reflects back onto the card while holding the
+        // proposal row lock. Keep the same proposal -> interaction lock order
+        // here so direct Settings approval cannot deadlock with card rejection.
+        await tx
+          .select({ id: companySecretProposals.id })
+          .from(companySecretProposals)
+          .where(and(
+            eq(companySecretProposals.id, secretProposalId),
+            eq(companySecretProposals.companyId, args.issue.companyId),
+            eq(companySecretProposals.interactionId, args.current.id),
+          ))
+          .for("update");
+      }
+
       const lockedCurrent = await tx
         .select()
         .from(issueThreadInteractions)
