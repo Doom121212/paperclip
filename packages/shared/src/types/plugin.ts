@@ -149,10 +149,6 @@ export interface SandboxProviderCapabilities {
   nativeSyncIn?: boolean;
   /** Provider can transfer files out of the sandbox through a native outbound hook. */
   nativeSyncOut?: boolean;
-  /** Provider can run a native sync and a command at the same time. */
-  concurrentSyncAndExec?: boolean;
-  /** Provider can run an inbound and an outbound native sync at the same time. */
-  concurrentSyncOperations?: boolean;
   /** Provider can keep a persistent process session open across commands. */
   persistentProcessSessions?: boolean;
   /** Provider can run a control command that does not wait for the main command. */

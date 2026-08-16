@@ -29,7 +29,6 @@ describe("sandbox capability contract normalizer", () => {
 
     expect(effective.nativeSyncIn).toBe(true);
     expect(effective.nativeSyncOut).toBe(true);
-    expect(effective.concurrentSyncOperations).toBe(true);
     // The worker did not verify these verbs, so the baseline is false.
     expect(effective.persistentProcessSessions).toBe(false);
     expect(effective.reusableLeases).toBe(false);
@@ -71,14 +70,12 @@ describe("sandbox capability contract normalizer", () => {
     });
     const effective = resolveEffectiveSandboxCapabilities({
       verifiedMethods: ALL_PLUGIN_METHODS,
-      declared: { nativeSyncIn: true, nativeSyncOut: true, concurrentSyncOperations: true, concurrentSyncAndExec: true },
+      declared: { nativeSyncIn: true, nativeSyncOut: true },
       narrowing,
     });
 
     expect(effective.nativeSyncIn).toBe(false);
     expect(effective.nativeSyncOut).toBe(false);
-    expect(effective.concurrentSyncOperations).toBe(false);
-    expect(effective.concurrentSyncAndExec).toBe(false);
     // A non-sync capability is unaffected by the job-lease narrowing.
     expect(effective.persistentProcessSessions).toBe(true);
 
@@ -222,8 +219,6 @@ describe("sandbox capability contract normalizer", () => {
       reusableLeases: true,
       nativeSyncIn: true,
       nativeSyncOut: true,
-      concurrentSyncAndExec: true,
-      concurrentSyncOperations: true,
       persistentProcessSessions: true,
       independentControlCommands: true,
     };

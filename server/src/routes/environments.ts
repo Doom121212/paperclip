@@ -716,15 +716,19 @@ export function environmentRoutes(
             supportsSavedProbe: true,
             supportsUnsavedProbe: true,
             supportsRunExecution: true,
-            // Derive the published value through the same declaration resolver
-            // that acquisition uses, so the nested `sandboxCapabilities`
-            // override wins over the legacy `supportsReusableLeases` flag. A
-            // manifest with legacy `true` and nested `false` must present as
-            // not reusable, because the runtime refuses the reuse. Default an
-            // absent value to false with `=== true`, so the presentation agrees
-            // with the execution guard.
+            // Publish reusable-lease support only when the declaration allows it
+            // AND the live worker verified both reuse lifecycle methods, so the
+            // presentation matches the acquisition guard, which requires both.
+            // The declaration part uses the same resolver acquisition uses, so
+            // the nested `sandboxCapabilities` override wins over the legacy
+            // `supportsReusableLeases` flag: a manifest with legacy `true` and
+            // nested `false` presents as not reusable. Default an absent value
+            // to false with `=== true`. A ready worker that omits either
+            // lifecycle method presents as not reusable, because acquisition
+            // would always fall back to an ephemeral lease.
             supportsReusableLeases:
-              resolveDeclaredSandboxCapabilities(driver).reusableLeases === true,
+              resolveDeclaredSandboxCapabilities(driver).reusableLeases === true
+              && driver.reusableLeaseMethodsVerified,
             supportsInteractiveSetup: driver.supportsInteractiveSetup,
             interactiveSetupConnectionTypes: driver.interactiveSetupConnectionTypes,
             supportsTemplateCapture: driver.supportsTemplateCapture,

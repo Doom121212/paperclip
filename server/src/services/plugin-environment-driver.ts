@@ -30,6 +30,21 @@ import {
 import { pluginRegistryService } from "./plugin-registry.js";
 import type { PluginWorkerManager } from "./plugin-worker-manager.js";
 
+/**
+ * The worker methods a sandbox provider must advertise before the host reuses
+ * a provider lease across runs. The host resumes a lease through
+ * `environmentResumeLease` and ends it through `environmentReleaseLease`, so a
+ * provider that omits either method can never complete the reuse path.
+ *
+ * The runtime capability normalizer maps `reusableLeases` to the same two
+ * methods, so the acquisition guard, the effective-capability snapshot, and the
+ * published provider-capabilities value all read one source and cannot drift.
+ */
+export const REUSABLE_LEASE_WORKER_METHODS = [
+  "environmentResumeLease",
+  "environmentReleaseLease",
+] as const;
+
 export interface ReadyPluginWorkerRecovery {
   pluginKeys: readonly string[];
   startWorker(plugin: { id: string; pluginKey: string }): Promise<boolean>;
@@ -45,6 +60,14 @@ export interface ReadyPluginEnvironmentDriver {
   configSchema: PluginEnvironmentDriverDeclaration["configSchema"];
   supportsReusableLeases?: PluginEnvironmentDriverDeclaration["supportsReusableLeases"];
   sandboxCapabilities?: PluginEnvironmentDriverDeclaration["sandboxCapabilities"];
+  /**
+   * The running worker for this exact plugin advertises BOTH reusable-lease
+   * lifecycle methods (`REUSABLE_LEASE_WORKER_METHODS`). The published
+   * provider-capabilities value grants reusable leases only when the
+   * declaration allows them AND this flag is true, so presentation matches the
+   * acquisition guard, which also verifies both methods live.
+   */
+  reusableLeaseMethodsVerified: boolean;
   supportsInteractiveSetup?: PluginEnvironmentDriverDeclaration["supportsInteractiveSetup"];
   interactiveSetupConnectionTypes?: PluginEnvironmentDriverDeclaration["interactiveSetupConnectionTypes"];
   supportsTemplateCapture?: PluginEnvironmentDriverDeclaration["supportsTemplateCapture"];
@@ -203,6 +226,13 @@ export async function listReadyPluginEnvironmentDrivers(input: {
     if (!input.workerManager.isRunning(plugin.id)) {
       continue;
     }
+    // The plugin is running, so read the live worker's verified methods once per
+    // plugin. A provider advertises reusable leases only when its worker carries
+    // both reuse lifecycle methods; the declaration alone never grants them.
+    const workerMethods = new Set(input.workerManager.getWorker(plugin.id)?.supportedMethods ?? []);
+    const reusableLeaseMethodsVerified = REUSABLE_LEASE_WORKER_METHODS.every(
+      (method) => workerMethods.has(method),
+    );
     rows.push(
       ...(plugin.manifestJson.environmentDrivers ?? [])
         .filter((driver) => driver.kind === "sandbox_provider")
@@ -215,6 +245,7 @@ export async function listReadyPluginEnvironmentDrivers(input: {
           configSchema: driver.configSchema,
           supportsReusableLeases: driver.supportsReusableLeases,
           sandboxCapabilities: driver.sandboxCapabilities,
+          reusableLeaseMethodsVerified,
           supportsInteractiveSetup: driver.supportsInteractiveSetup,
           interactiveSetupConnectionTypes: driver.interactiveSetupConnectionTypes,
           supportsTemplateCapture: driver.supportsTemplateCapture,

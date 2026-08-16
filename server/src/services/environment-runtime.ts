@@ -53,6 +53,7 @@ import {
 import { pluginRegistryService } from "./plugin-registry.js";
 import type { ExecuteLogSink, PluginWorkerManager } from "./plugin-worker-manager.js";
 import {
+  REUSABLE_LEASE_WORKER_METHODS,
   destroyPluginEnvironmentLease,
   executePluginEnvironmentCommand,
   realizePluginEnvironmentWorkspace,
@@ -72,8 +73,6 @@ export const SANDBOX_CAPABILITY_KEYS = [
   "reusableLeases",
   "nativeSyncIn",
   "nativeSyncOut",
-  "concurrentSyncAndExec",
-  "concurrentSyncOperations",
   "persistentProcessSessions",
   "independentControlCommands",
 ] as const;
@@ -101,16 +100,16 @@ export type SandboxCapabilityKey = (typeof SANDBOX_CAPABILITY_KEYS)[number];
  *   `environmentReleaseLease` (end-of-run release); both run on the reuse path.
  * - `persistentProcessSessions` and `independentControlCommands` require
  *   `environmentExecute`; both run commands through it.
- * - `concurrentSyncOperations` requires both sync verbs.
- * - `concurrentSyncAndExec` requires `environmentExecute` and at least one sync
- *   verb.
  */
 const SANDBOX_CAPABILITY_PREREQUISITE_METHODS: Record<SandboxCapabilityKey, readonly (readonly string[])[]> = {
-  reusableLeases: [["environmentResumeLease"], ["environmentReleaseLease"]],
+  // Reusable leases require BOTH reuse verbs. Each verb is its own required
+  // group, so both must be verified. The list function that publishes
+  // provider-level reusable support checks the same verbs; both read from
+  // `REUSABLE_LEASE_WORKER_METHODS`, so the runtime guard and the published
+  // value cannot drift.
+  reusableLeases: REUSABLE_LEASE_WORKER_METHODS.map((method) => [method]),
   nativeSyncIn: [["environmentSyncIn"]],
   nativeSyncOut: [["environmentSyncOut"]],
-  concurrentSyncAndExec: [["environmentExecute"], ["environmentSyncIn", "environmentSyncOut"]],
-  concurrentSyncOperations: [["environmentSyncIn"], ["environmentSyncOut"]],
   persistentProcessSessions: [["environmentExecute"]],
   independentControlCommands: [["environmentExecute"]],
 };
@@ -185,8 +184,6 @@ export function resolveEffectiveSandboxCapabilities(input: {
     reusableLeases: resolve("reusableLeases"),
     nativeSyncIn: resolve("nativeSyncIn"),
     nativeSyncOut: resolve("nativeSyncOut"),
-    concurrentSyncAndExec: resolve("concurrentSyncAndExec"),
-    concurrentSyncOperations: resolve("concurrentSyncOperations"),
     persistentProcessSessions: resolve("persistentProcessSessions"),
     independentControlCommands: resolve("independentControlCommands"),
   };
@@ -223,8 +220,6 @@ export function buildSandboxCapabilityNarrowing(input: {
   if (metadata.backend === "job" || metadata.nativeFileSyncUnsupported === true) {
     narrowing.nativeSyncIn = false;
     narrowing.nativeSyncOut = false;
-    narrowing.concurrentSyncOperations = false;
-    narrowing.concurrentSyncAndExec = false;
   }
 
   if (input.configResolutionFailed === true) {
@@ -1659,17 +1654,13 @@ function createSandboxEnvironmentDriver(
 
       if (metadata.sandboxProviderPlugin) {
         const pluginId = readString(metadata.pluginId);
-        verifiedMethods =
-          (pluginId ? pluginWorkerManager?.getWorker(pluginId)?.supportedMethods : undefined) ?? [];
         // Read the declaration from the exact plugin that acquired the lease,
         // not the first installed plugin with this driver key. A driver key is
         // only unique inside one manifest, so two plugins can share it. The
         // by-key resolver could intersect this lease's verified methods with a
-        // different plugin's declaration. The resolver reads the manifest even
-        // when the worker is not running: an unverified declaration still
-        // resolves to false through the normalizer. The runtime fails closed
-        // when the pinned plugin id is absent, or when that exact plugin no
-        // longer declares this provider key; `declared` stays null.
+        // different plugin's declaration. This resolver fails closed: it returns
+        // null when the pinned plugin id is absent, or when that exact plugin no
+        // longer declares this provider key with the `sandbox_provider` kind.
         const resolvedDriver = pluginId
           ? await resolvePluginSandboxProviderDriverById({
               db,
@@ -1677,9 +1668,24 @@ function createSandboxEnvironmentDriver(
               driverKey: providerKey,
             })
           : null;
-        if (resolvedDriver) {
-          declared = resolveDeclaredSandboxCapabilities(resolvedDriver.driver);
+        if (!pluginId || !resolvedDriver) {
+          // Exact-plugin identity failure. The lease pins a plugin id, but the
+          // id is missing, that plugin is absent, or it no longer declares this
+          // provider key. Fail closed: resolve every effective capability to
+          // false, no matter what methods a stale or running worker still
+          // advertises. Do not read the worker methods here; passing them would
+          // let an identity-less lease keep a verified baseline. This differs
+          // from a valid plugin whose manifest merely omits
+          // `sandboxCapabilities`: that case keeps `declared` null below and
+          // defers to verified worker discovery.
+          return resolveEffectiveSandboxCapabilities({
+            verifiedMethods: [],
+            declared: null,
+            narrowing: null,
+          });
         }
+        verifiedMethods = pluginWorkerManager?.getWorker(pluginId)?.supportedMethods ?? [];
+        declared = resolveDeclaredSandboxCapabilities(resolvedDriver.driver);
         try {
           config = (await resolvePluginSandboxRuntimeConfig({
             environment: input.environment,

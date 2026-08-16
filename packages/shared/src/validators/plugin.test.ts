@@ -283,8 +283,6 @@ describe("sandbox provider capability declaration validators", () => {
           reusableLeases: true,
           nativeSyncIn: true,
           nativeSyncOut: false,
-          concurrentSyncAndExec: true,
-          concurrentSyncOperations: false,
           persistentProcessSessions: true,
           independentControlCommands: false,
         },
@@ -295,8 +293,6 @@ describe("sandbox provider capability declaration validators", () => {
       reusableLeases: true,
       nativeSyncIn: true,
       nativeSyncOut: false,
-      concurrentSyncAndExec: true,
-      concurrentSyncOperations: false,
       persistentProcessSessions: true,
       independentControlCommands: false,
     });
@@ -313,6 +309,20 @@ describe("sandbox provider capability declaration validators", () => {
     );
 
     expect(rejected.success).toBe(false);
+  });
+
+  it("test_removed_concurrency_capabilities_are_rejected_as_unknown_keys", () => {
+    // The concurrency flags left the public contract because no runtime path
+    // enforced them. The strict schema now rejects them, so a manifest cannot
+    // declare a capability the host does not honor.
+    for (const key of ["concurrentSyncAndExec", "concurrentSyncOperations"]) {
+      const rejected = pluginManifestV1Schema.safeParse(
+        buildSandboxProviderManifest({
+          sandboxCapabilities: { [key]: true },
+        }),
+      );
+      expect(rejected.success).toBe(false);
+    }
   });
 
   it("test_supports_reusable_leases_compat_maps_to_reusable_leases", () => {

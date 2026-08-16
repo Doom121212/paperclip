@@ -16,8 +16,6 @@ const SNAPSHOT: EffectiveSandboxCapabilities = {
   reusableLeases: true,
   nativeSyncIn: true,
   nativeSyncOut: false,
-  concurrentSyncAndExec: false,
-  concurrentSyncOperations: false,
   persistentProcessSessions: true,
   independentControlCommands: false,
 };
@@ -28,8 +26,6 @@ const FULL_GRANT: EffectiveSandboxCapabilities = {
   reusableLeases: true,
   nativeSyncIn: true,
   nativeSyncOut: true,
-  concurrentSyncAndExec: true,
-  concurrentSyncOperations: true,
   persistentProcessSessions: true,
   independentControlCommands: true,
 };

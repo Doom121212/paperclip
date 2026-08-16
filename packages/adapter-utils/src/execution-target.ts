@@ -100,8 +100,6 @@ export interface EffectiveSandboxCapabilities {
   readonly reusableLeases: boolean;
   readonly nativeSyncIn: boolean;
   readonly nativeSyncOut: boolean;
-  readonly concurrentSyncAndExec: boolean;
-  readonly concurrentSyncOperations: boolean;
   readonly persistentProcessSessions: boolean;
   readonly independentControlCommands: boolean;
 }
@@ -247,8 +245,6 @@ function parseEffectiveSandboxCapabilities(value: unknown): EffectiveSandboxCapa
     reusableLeases: parsed.reusableLeases === true,
     nativeSyncIn: parsed.nativeSyncIn === true,
     nativeSyncOut: parsed.nativeSyncOut === true,
-    concurrentSyncAndExec: parsed.concurrentSyncAndExec === true,
-    concurrentSyncOperations: parsed.concurrentSyncOperations === true,
     persistentProcessSessions: parsed.persistentProcessSessions === true,
     independentControlCommands: parsed.independentControlCommands === true,
   };

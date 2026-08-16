@@ -163,8 +163,6 @@ export const sandboxProviderCapabilitiesSchema = z.object({
   reusableLeases: z.boolean().optional(),
   nativeSyncIn: z.boolean().optional(),
   nativeSyncOut: z.boolean().optional(),
-  concurrentSyncAndExec: z.boolean().optional(),
-  concurrentSyncOperations: z.boolean().optional(),
   persistentProcessSessions: z.boolean().optional(),
   independentControlCommands: z.boolean().optional(),
 }).strict();

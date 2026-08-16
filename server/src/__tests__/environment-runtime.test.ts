@@ -28,7 +28,7 @@ import {
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
 import { resolveEnvironmentDriverConfigForRuntime } from "../services/environment-config.ts";
-import { environmentRuntimeService, findReusableSandboxLeaseId } from "../services/environment-runtime.ts";
+import { SANDBOX_CAPABILITY_KEYS, environmentRuntimeService, findReusableSandboxLeaseId } from "../services/environment-runtime.ts";
 import { environmentService } from "../services/environments.ts";
 import { secretService } from "../services/secrets.ts";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.ts";
@@ -3304,6 +3304,154 @@ describeEmbeddedPostgres("environmentRuntimeService", () => {
     // owner declaration and did not fail every capability closed.
     expect(effective?.nativeSyncIn).toBe(true);
     expect(effective?.nativeSyncOut).toBe(true);
+  });
+
+  it("fails every effective capability closed when the pinned plugin id is absent from the registry", async () => {
+    // The lease pins a plugin id, but that plugin record is gone. A stale worker
+    // entry still advertises every method. The runtime must not read the stale
+    // methods; it must fail closed because the exact-plugin identity is gone.
+    const { pluginId, environment, reusableLease } = await seedReusablePluginSandboxLease();
+    await db.delete(plugins).where(eq(plugins.id, pluginId));
+
+    const workerManager = {
+      isRunning: vi.fn(() => true),
+      call: vi.fn(),
+      getWorker: vi.fn(() => ({
+        supportedMethods: [
+          "environmentResumeLease",
+          "environmentReleaseLease",
+          "environmentExecute",
+          "environmentSyncIn",
+          "environmentSyncOut",
+        ],
+      })),
+    } as unknown as PluginWorkerManager;
+    const runtimeWithPlugin = environmentRuntimeService(db, { pluginWorkerManager: workerManager });
+
+    const effective = await runtimeWithPlugin.effectiveSandboxCapabilities({
+      environment,
+      lease: reusableLease,
+    });
+
+    for (const key of SANDBOX_CAPABILITY_KEYS) {
+      expect(effective?.[key]).toBe(false);
+    }
+  });
+
+  it("fails every effective capability closed when the pinned plugin no longer declares this provider key", async () => {
+    // The pinned plugin still exists, but it no longer declares a
+    // `sandbox_provider` driver with this key (here it changed the driver kind).
+    // A running worker still advertises every method. The runtime must fail
+    // closed because the exact-plugin declaration is gone.
+    const { pluginId, environment, reusableLease } = await seedReusablePluginSandboxLease();
+    await db
+      .update(plugins)
+      .set({
+        manifestJson: {
+          id: "acme.reusable-sandbox-provider",
+          apiVersion: 1,
+          version: "1.0.0",
+          displayName: "Reusable Sandbox Provider",
+          description: "Owner plugin that no longer declares the provider key",
+          author: "Paperclip",
+          categories: ["automation"],
+          capabilities: ["environment.drivers.register"],
+          entrypoints: { worker: "dist/worker.js" },
+          environmentDrivers: [
+            {
+              driverKey: "fake-plugin",
+              // The key exists, but the kind is now a plain environment driver,
+              // not a sandbox provider. The by-id resolver fails closed.
+              kind: "environment_driver",
+              displayName: "Fake Plugin",
+              configSchema: { type: "object", properties: {} },
+            },
+          ],
+        },
+        updatedAt: new Date(),
+      } as any)
+      .where(eq(plugins.id, pluginId));
+
+    const workerManager = {
+      isRunning: vi.fn((id: string) => id === pluginId),
+      call: vi.fn(),
+      getWorker: vi.fn(() => ({
+        supportedMethods: [
+          "environmentResumeLease",
+          "environmentReleaseLease",
+          "environmentExecute",
+          "environmentSyncIn",
+          "environmentSyncOut",
+        ],
+      })),
+    } as unknown as PluginWorkerManager;
+    const runtimeWithPlugin = environmentRuntimeService(db, { pluginWorkerManager: workerManager });
+
+    const effective = await runtimeWithPlugin.effectiveSandboxCapabilities({
+      environment,
+      lease: reusableLease,
+    });
+
+    for (const key of SANDBOX_CAPABILITY_KEYS) {
+      expect(effective?.[key]).toBe(false);
+    }
+  });
+
+  it("defers to verified worker discovery for a valid pinned plugin that omits sandboxCapabilities", async () => {
+    // A valid, identified plugin whose manifest declares no `sandboxCapabilities`
+    // and no legacy reuse flag. Its worker verifies the sync verbs. An omitted
+    // declaration is NOT an identity failure: the runtime defers to the verified
+    // baseline, so native sync stays granted while unverified capabilities stay
+    // false.
+    const { pluginId, environment, reusableLease } = await seedReusablePluginSandboxLease();
+    await db
+      .update(plugins)
+      .set({
+        manifestJson: {
+          id: "acme.reusable-sandbox-provider",
+          apiVersion: 1,
+          version: "1.0.0",
+          displayName: "Reusable Sandbox Provider",
+          description: "Owner plugin that omits the capability declaration",
+          author: "Paperclip",
+          categories: ["automation"],
+          capabilities: ["environment.drivers.register"],
+          entrypoints: { worker: "dist/worker.js" },
+          environmentDrivers: [
+            {
+              driverKey: "fake-plugin",
+              kind: "sandbox_provider",
+              displayName: "Fake Plugin",
+              configSchema: { type: "object", properties: {} },
+            },
+          ],
+        },
+        updatedAt: new Date(),
+      } as any)
+      .where(eq(plugins.id, pluginId));
+
+    const workerManager = {
+      isRunning: vi.fn((id: string) => id === pluginId),
+      call: vi.fn(),
+      getWorker: vi.fn((id: string) =>
+        id === pluginId
+          ? { supportedMethods: ["environmentSyncIn", "environmentSyncOut"] }
+          : undefined,
+      ),
+    } as unknown as PluginWorkerManager;
+    const runtimeWithPlugin = environmentRuntimeService(db, { pluginWorkerManager: workerManager });
+
+    const effective = await runtimeWithPlugin.effectiveSandboxCapabilities({
+      environment,
+      lease: reusableLease,
+    });
+
+    // The worker verified the sync verbs and the omitted declaration adds no
+    // restriction, so native sync stays granted.
+    expect(effective?.nativeSyncIn).toBe(true);
+    expect(effective?.nativeSyncOut).toBe(true);
+    // The worker did not verify the reuse verbs, so reusable leases stay false.
+    expect(effective?.reusableLeases).toBe(false);
   });
 
   it("releases a sandbox run lease from metadata after the environment config changes", async () => {
