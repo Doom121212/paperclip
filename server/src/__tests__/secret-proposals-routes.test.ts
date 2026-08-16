@@ -338,8 +338,10 @@ describeEmbeddedPostgres("secret proposal routes", () => {
       sourceRunId: fixture.heartbeatRunId,
       createdByAgentId: fixture.agentId,
       addresseeAgentId: null,
-      requestedResolverPolicy: "board_only",
-      effectiveResolverPolicy: "board_only",
+      requestedResolverPolicy: "human_only",
+      effectiveResolverPolicy: "human_only",
+      resolverPolicyProvenance: "explicit",
+      effectiveResolverPolicySource: "governed_action",
       payload: expect.objectContaining({
         secretProposal: expect.objectContaining({
           proposalId: bindingResponse.body.id,
