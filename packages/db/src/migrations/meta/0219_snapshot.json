@@ -1,6 +1,6 @@
 {
-  "id": "977417b5-3119-4ffd-8e89-df24306433ce",
-  "prevId": "b343f475-7211-45b5-bdcb-8461453b72ec",
+  "id": "e05c079e-3003-4e86-b864-a38822aef527",
+  "prevId": "66cebac9-8e3b-4060-82e4-21b52490e8ab",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -4534,187 +4534,6 @@
           "value": "\"cases\".\"status\" in ('draft', 'in_progress', 'in_review', 'approved', 'done', 'cancelled')"
         }
       },
-      "isRLSEnabled": false
-    },
-    "public.claude_setup_token_sessions": {
-      "name": "claude_setup_token_sessions",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "session_id": {
-          "name": "session_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "company_id": {
-          "name": "company_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "owner_user_id": {
-          "name": "owner_user_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "adapter_type": {
-          "name": "adapter_type",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "environment_id": {
-          "name": "environment_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "lease_id": {
-          "name": "lease_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "state": {
-          "name": "state",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'starting'"
-        },
-        "deadline_at": {
-          "name": "deadline_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "bound_at": {
-          "name": "bound_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "claude_setup_token_sessions_active_uq": {
-          "name": "claude_setup_token_sessions_active_uq",
-          "columns": [
-            {
-              "expression": "company_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "owner_user_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "adapter_type",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "environment_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "\"claude_setup_token_sessions\".\"state\" IN ('starting', 'awaiting_code', 'submitting', 'persisting')",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "claude_setup_token_sessions_session_id_uq": {
-          "name": "claude_setup_token_sessions_session_id_uq",
-          "columns": [
-            {
-              "expression": "session_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "claude_setup_token_sessions_deadline_idx": {
-          "name": "claude_setup_token_sessions_deadline_idx",
-          "columns": [
-            {
-              "expression": "deadline_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "claude_setup_token_sessions_company_id_companies_id_fk": {
-          "name": "claude_setup_token_sessions_company_id_companies_id_fk",
-          "tableFrom": "claude_setup_token_sessions",
-          "tableTo": "companies",
-          "columnsFrom": [
-            "company_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "claude_setup_token_sessions_environment_id_environments_id_fk": {
-          "name": "claude_setup_token_sessions_environment_id_environments_id_fk",
-          "tableFrom": "claude_setup_token_sessions",
-          "tableTo": "environments",
-          "columnsFrom": [
-            "environment_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
       "isRLSEnabled": false
     },
     "public.cli_auth_challenges": {
@@ -13722,7 +13541,7 @@
           "name": "environment_id",
           "type": "uuid",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "execution_workspace_id": {
           "name": "execution_workspace_id",
@@ -13973,7 +13792,7 @@
           "columnsTo": [
             "id"
           ],
-          "onDelete": "set null",
+          "onDelete": "cascade",
           "onUpdate": "no action"
         },
         "environment_leases_execution_workspace_id_execution_workspaces_id_fk": {
@@ -21618,14 +21437,28 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true,
-          "default": "'board_only'"
+          "default": "'anyone'"
         },
         "effective_resolver_policy": {
           "name": "effective_resolver_policy",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
-          "default": "'board_only'"
+          "default": "'anyone'"
+        },
+        "resolver_policy_provenance": {
+          "name": "resolver_policy_provenance",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'inherited'"
+        },
+        "effective_resolver_policy_source": {
+          "name": "effective_resolver_policy_source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'requested'"
         },
         "idempotency_key": {
           "name": "idempotency_key",
@@ -39424,6 +39257,187 @@
             "id"
           ],
           "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.claude_setup_token_sessions": {
+      "name": "claude_setup_token_sessions",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "session_id": {
+          "name": "session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "company_id": {
+          "name": "company_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "owner_user_id": {
+          "name": "owner_user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "adapter_type": {
+          "name": "adapter_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "environment_id": {
+          "name": "environment_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "lease_id": {
+          "name": "lease_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'starting'"
+        },
+        "deadline_at": {
+          "name": "deadline_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "bound_at": {
+          "name": "bound_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "claude_setup_token_sessions_active_uq": {
+          "name": "claude_setup_token_sessions_active_uq",
+          "columns": [
+            {
+              "expression": "company_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "owner_user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "adapter_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "environment_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"claude_setup_token_sessions\".\"state\" IN ('starting', 'awaiting_code', 'submitting', 'persisting')",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "claude_setup_token_sessions_session_id_uq": {
+          "name": "claude_setup_token_sessions_session_id_uq",
+          "columns": [
+            {
+              "expression": "session_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "claude_setup_token_sessions_deadline_idx": {
+          "name": "claude_setup_token_sessions_deadline_idx",
+          "columns": [
+            {
+              "expression": "deadline_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "claude_setup_token_sessions_company_id_companies_id_fk": {
+          "name": "claude_setup_token_sessions_company_id_companies_id_fk",
+          "tableFrom": "claude_setup_token_sessions",
+          "tableTo": "companies",
+          "columnsFrom": [
+            "company_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "claude_setup_token_sessions_environment_id_environments_id_fk": {
+          "name": "claude_setup_token_sessions_environment_id_environments_id_fk",
+          "tableFrom": "claude_setup_token_sessions",
+          "tableTo": "environments",
+          "columnsFrom": [
+            "environment_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
           "onUpdate": "no action"
         }
       },
