@@ -1580,9 +1580,14 @@ export function issueThreadInteractionService(db: Db, opts: IssueThreadInteracti
 
     const now = new Date();
     const result = await db.transaction(async (tx) => {
-      // Lock the issue before claiming the interaction. Policy mutations and
-      // review transitions use the same issue-row lock, so the authoritative
-      // review policy and requester are stable through the verdict write.
+      // Secret proposal lifecycle writes use proposal -> issue -> interaction.
+      // Take the optional proposal lock first so execution-result recording
+      // cannot deadlock with this verdict while touching the issue receipt.
+      await lockLinkedSecretProposal(tx as unknown as Db, args.current);
+
+      // Policy mutations and review transitions use the same issue-row lock,
+      // so the authoritative review policy and requester are stable through
+      // the verdict write.
       const issueContext = await tx
         .select({
           id: issues.id,
@@ -1602,11 +1607,6 @@ export function issueThreadInteractionService(db: Db, opts: IssueThreadInteracti
       if (!issueContext || issueContext.companyId !== args.issue.companyId) {
         throw notFound("Issue not found");
       }
-
-      // Proposal resolution reflects back onto the card while holding the
-      // proposal row lock. Keep the proposal -> interaction order here so
-      // direct Settings approval cannot deadlock with card acceptance.
-      await lockLinkedSecretProposal(tx as unknown as Db, args.current);
 
       const lockedCurrent = await tx
         .select()
@@ -1750,6 +1750,11 @@ export function issueThreadInteractionService(db: Db, opts: IssueThreadInteracti
 
     const now = new Date();
     const updated = await db.transaction(async (tx) => {
+      // Keep the same proposal -> issue -> interaction order used by acceptance
+      // and execution-result recording. In particular, do not hold the issue
+      // row while waiting for a concurrent proposal execution to finish.
+      await lockLinkedSecretProposal(tx as unknown as Db, args.current);
+
       const issueContext = await tx
         .select({
           id: issues.id,
@@ -1768,10 +1773,6 @@ export function issueThreadInteractionService(db: Db, opts: IssueThreadInteracti
       if (!issueContext || issueContext.companyId !== args.issue.companyId) {
         throw notFound("Issue not found");
       }
-
-      // Direct Settings approval locks the proposal before reflecting onto the
-      // interaction. Take the same locks in the same order before rejection.
-      await lockLinkedSecretProposal(tx as unknown as Db, args.current);
 
       const lockedCurrent = await tx
         .select()

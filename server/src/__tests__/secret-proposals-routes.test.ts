@@ -987,6 +987,89 @@ describeEmbeddedPostgres("secret proposal routes", () => {
       })]);
   });
 
+  it("waits on a linked proposal before locking the issue during card rejection", async () => {
+    const fixture = await seedRun();
+    const liveSecret = await secretService(db).create(fixture.companyId, {
+      name: "dev/card-lock-order/source",
+      key: "CARD_LOCK_ORDER_SOURCE",
+      provider: "local_encrypted",
+      value: "card-lock-order-secret",
+    });
+    const proposed = await request(createAgentApp(fixture))
+      .post("/api/agents/me/secret-proposals")
+      .send({
+        kind: "binding",
+        secretId: liveSecret.id,
+        configPath: "access.CARD_LOCK_ORDER_ALIAS",
+        justification: "Verify the proposal-to-issue lock order",
+      });
+    expect(proposed.status).toBe(201);
+
+    let signalProposalLocked!: () => void;
+    let releaseProposalLock!: () => void;
+    const proposalLocked = new Promise<void>((resolve) => {
+      signalProposalLocked = resolve;
+    });
+    const releaseProposal = new Promise<void>((resolve) => {
+      releaseProposalLock = resolve;
+    });
+    const heldProposalLock = db.transaction(async (tx) => {
+      await tx
+        .select({ id: companySecretProposals.id })
+        .from(companySecretProposals)
+        .where(eq(companySecretProposals.id, proposed.body.id))
+        .for("update");
+      signalProposalLocked();
+      await releaseProposal;
+    });
+    await proposalLocked;
+
+    const rejection = issueThreadInteractionService(db).rejectInteraction(
+      { id: fixture.issueId, companyId: fixture.companyId, status: "in_progress" },
+      proposed.body.interactionId,
+      { reason: "Reject after the lock-order check" },
+      { userId: "board-user" },
+    );
+
+    try {
+      let rejectionWaitingOnProposal = false;
+      for (let attempt = 0; attempt < 80; attempt += 1) {
+        const [waiting] = await db.execute<{ waiting: boolean }>(sql`
+          SELECT EXISTS (
+            SELECT 1
+            FROM pg_stat_activity
+            WHERE state = 'active'
+              AND wait_event_type = 'Lock'
+              AND query ILIKE '%company_secret_proposals%'
+              AND query ILIKE '%for update%'
+          ) AS waiting
+        `);
+        if (waiting?.waiting) {
+          rejectionWaitingOnProposal = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      expect(rejectionWaitingOnProposal).toBe(true);
+
+      // Execution-result recording locks proposal -> interaction -> issue. A
+      // rejection waiting on the proposal must not already hold the issue row.
+      await expect(db.transaction(async (tx) => {
+        await tx.execute(sql`
+          SELECT id
+          FROM issues
+          WHERE id = ${fixture.issueId}
+          FOR UPDATE NOWAIT
+        `);
+      })).resolves.toBeUndefined();
+    } finally {
+      releaseProposalLock();
+      await heldProposalLock;
+    }
+
+    await expect(rejection).resolves.toMatchObject({ status: "rejected" });
+  });
+
   it("keeps proposal and card consistent when approval races card rejection", async () => {
     const fixture = await seedRun();
     const liveSecret = await secretService(db).create(fixture.companyId, {
