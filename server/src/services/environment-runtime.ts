@@ -1149,33 +1149,48 @@ function createSandboxEnvironmentDriver(
 
         let providerLease: PluginEnvironmentLease | null = null;
         if (reusableLease?.providerLeaseId) {
-          try {
-            const resumed = await pluginWorkerManager.call(
-                pluginProvider.resolved.plugin.id,
-                "environmentResumeLease",
-                {
-                  driverKey: parsed.config.provider,
-                  companyId: input.companyId,
-                  environmentId: input.environment.id,
-                  issueId: input.issueId,
-                  config: workerConfig,
-                  providerLeaseId: reusableLease.providerLeaseId,
-                  leaseMetadata: reusableLease.metadata ?? undefined,
-                },
-                resolvePluginSandboxRpcTimeoutMs(workerConfig),
-              );
-            providerLease =
-              typeof resumed.providerLeaseId === "string" && resumed.providerLeaseId.length > 0
-                ? resumed
-                : null;
-          } catch {
-            providerLease = null;
+          // The `supportsReusableLeases` check above reads a snapshot of the
+          // worker methods. The runtime then does asynchronous database work
+          // (list, fingerprint, obsolete-lease cleanup) before this dispatch. A
+          // worker restart in that window can drop `environmentResumeLease`
+          // while the snapshot still marks the method verified. Re-check the
+          // live worker here and fail closed when the method is absent: skip the
+          // resume, destroy the stale reusable lease, and acquire a fresh lease
+          // below. The runtime never dispatches a resume the live worker cannot
+          // serve.
+          const workerVerifiesResume = pluginWorkerVerifiesLifecycleMethod(
+            pluginProvider.resolved.plugin.id,
+            "environmentResumeLease",
+          );
+          if (workerVerifiesResume) {
+            try {
+              const resumed = await pluginWorkerManager.call(
+                  pluginProvider.resolved.plugin.id,
+                  "environmentResumeLease",
+                  {
+                    driverKey: parsed.config.provider,
+                    companyId: input.companyId,
+                    environmentId: input.environment.id,
+                    issueId: input.issueId,
+                    config: workerConfig,
+                    providerLeaseId: reusableLease.providerLeaseId,
+                    leaseMetadata: reusableLease.metadata ?? undefined,
+                  },
+                  resolvePluginSandboxRpcTimeoutMs(workerConfig),
+                );
+              providerLease =
+                typeof resumed.providerLeaseId === "string" && resumed.providerLeaseId.length > 0
+                  ? resumed
+                  : null;
+            } catch {
+              providerLease = null;
+            }
           }
           if (!providerLease) {
             await destroyReusableSandboxLease({
               environment: input.environment,
               lease: reusableLease,
-              failureReason: "resume_failed",
+              failureReason: workerVerifiesResume ? "resume_failed" : "resume_capability_lost",
             });
           }
         }
