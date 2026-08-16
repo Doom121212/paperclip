@@ -3198,6 +3198,114 @@ describeEmbeddedPostgres("environmentRuntimeService", () => {
     });
   });
 
+  it("resolves effective capabilities from the lease's exact plugin, not an earlier plugin that shares the driver key", async () => {
+    // The helper seeds the plugin that owns the lease. Pin it to `pluginId`
+    // through the lease metadata and give it a lower-priority sibling.
+    const { pluginId, environment, reusableLease } = await seedReusablePluginSandboxLease();
+
+    // Rewrite the owner plugin so it DENIES reusable leases through the nested
+    // capability declaration.
+    await db
+      .update(plugins)
+      .set({
+        manifestJson: {
+          id: "acme.reusable-sandbox-provider",
+          apiVersion: 1,
+          version: "1.0.0",
+          displayName: "Reusable Sandbox Provider",
+          description: "Owner plugin that denies reusable leases",
+          author: "Paperclip",
+          categories: ["automation"],
+          capabilities: ["environment.drivers.register"],
+          entrypoints: { worker: "dist/worker.js" },
+          environmentDrivers: [
+            {
+              driverKey: "fake-plugin",
+              kind: "sandbox_provider",
+              displayName: "Fake Plugin",
+              sandboxCapabilities: { reusableLeases: false },
+              configSchema: { type: "object", properties: {} },
+            },
+          ],
+        },
+        updatedAt: new Date(),
+      } as any)
+      .where(eq(plugins.id, pluginId));
+
+    // Install an EARLIER plugin that shares the driver key and grants reusable
+    // leases. It is not ready and never acquired this lease. A resolver keyed by
+    // driver key alone would read this declaration and grant a capability the
+    // owner plugin denied.
+    const collidingPluginId = randomUUID();
+    await db.insert(plugins).values({
+      id: collidingPluginId,
+      pluginKey: "acme.colliding-sandbox-provider",
+      packageName: "@acme/colliding-sandbox-provider",
+      version: "1.0.0",
+      apiVersion: 1,
+      categories: ["automation"],
+      manifestJson: {
+        id: "acme.colliding-sandbox-provider",
+        apiVersion: 1,
+        version: "1.0.0",
+        displayName: "Colliding Sandbox Provider",
+        description: "Earlier plugin that shares the driver key",
+        author: "Paperclip",
+        categories: ["automation"],
+        capabilities: ["environment.drivers.register"],
+        entrypoints: { worker: "dist/worker.js" },
+        environmentDrivers: [
+          {
+            driverKey: "fake-plugin",
+            kind: "sandbox_provider",
+            displayName: "Fake Plugin",
+            supportsReusableLeases: true,
+            configSchema: { type: "object", properties: {} },
+          },
+        ],
+      },
+      status: "installed",
+      installOrder: 0,
+      updatedAt: new Date(),
+    } as any);
+
+    // The owner worker verifies the reuse verbs and the sync verbs, so every
+    // capability is verified. Only the owner's declaration can narrow one.
+    const workerManager = {
+      isRunning: vi.fn((id: string) => id === pluginId),
+      call: vi.fn(),
+      getWorker: vi.fn((id: string) =>
+        id === pluginId
+          ? {
+              supportedMethods: [
+                "environmentResumeLease",
+                "environmentReleaseLease",
+                "environmentSyncIn",
+                "environmentSyncOut",
+              ],
+            }
+          : undefined,
+      ),
+    } as unknown as PluginWorkerManager;
+    const runtimeWithPlugin = environmentRuntimeService(db, { pluginWorkerManager: workerManager });
+
+    expect(reusableLease.metadata?.pluginId).toBe(pluginId);
+
+    const effective = await runtimeWithPlugin.effectiveSandboxCapabilities({
+      environment,
+      lease: reusableLease,
+    });
+
+    // The runtime read the owner plugin's declaration, so it denies reusable
+    // leases even though the earlier plugin grants them.
+    expect(effective?.reusableLeases).toBe(false);
+    // The owner plugin does not restrict native sync, and its worker verifies
+    // the sync verbs, so those stay granted. This proves the resolver read the
+    // owner declaration and did not fail every capability closed.
+    expect(effective?.nativeSyncIn).toBe(true);
+    expect(effective?.nativeSyncOut).toBe(true);
+  });
+
   it("releases a sandbox run lease from metadata after the environment config changes", async () => {
     const { companyId, environment, runId } = await seedEnvironment({
       driver: "sandbox",

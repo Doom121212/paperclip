@@ -131,6 +131,35 @@ export async function resolvePluginSandboxProviderDriverByKey(input: {
   return null;
 }
 
+/**
+ * Resolve the sandbox-provider driver declaration from one exact plugin id.
+ *
+ * A driver key is only unique inside a single manifest. Two installed plugins
+ * can declare the same driver key. A lease pins the plugin that acquired it
+ * through `metadata.pluginId`. Use this resolver, not the by-key resolver, when
+ * the caller must read the declaration from that exact plugin. The by-key
+ * resolver returns the first installed plugin with the key, which can be a
+ * different, even disabled, plugin.
+ *
+ * This resolver fails closed. It returns `null` when the plugin id is unknown,
+ * or when that plugin no longer declares a `sandbox_provider` driver with the
+ * given key.
+ */
+export async function resolvePluginSandboxProviderDriverById(input: {
+  db: Db;
+  pluginId: string;
+  driverKey: string;
+}): Promise<{ plugin: Awaited<ReturnType<ReturnType<typeof pluginRegistryService>["getById"]>>; driver: PluginEnvironmentDriverDeclaration } | null> {
+  const pluginRegistry = pluginRegistryService(input.db);
+  const plugin = await pluginRegistry.getById(input.pluginId);
+  if (!plugin) return null;
+  const driver = plugin.manifestJson.environmentDrivers?.find(
+    (candidate) => candidate.driverKey === input.driverKey && candidate.kind === "sandbox_provider",
+  ) as PluginEnvironmentDriverDeclaration | undefined;
+  if (!driver) return null;
+  return { plugin, driver };
+}
+
 export async function listReadyPluginEnvironmentDrivers(input: {
   db: Db;
   workerManager?: PluginWorkerManager;

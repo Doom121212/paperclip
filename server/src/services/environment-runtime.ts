@@ -57,6 +57,7 @@ import {
   executePluginEnvironmentCommand,
   realizePluginEnvironmentWorkspace,
   resolvePluginSandboxProviderDriverByKey,
+  resolvePluginSandboxProviderDriverById,
   resolvePluginExecuteRpcTimeoutMs,
   resumePluginEnvironmentLease,
 } from "./plugin-environment-driver.js";
@@ -1660,14 +1661,22 @@ function createSandboxEnvironmentDriver(
         const pluginId = readString(metadata.pluginId);
         verifiedMethods =
           (pluginId ? pluginWorkerManager?.getWorker(pluginId)?.supportedMethods : undefined) ?? [];
-        // Read the manifest declaration even when the worker is not running: an
-        // unverified declaration still resolves to false through the normalizer.
-        const resolvedDriver = await resolvePluginSandboxProviderDriverByKey({
-          db,
-          driverKey: providerKey,
-          workerManager: pluginWorkerManager,
-          requireRunning: false,
-        });
+        // Read the declaration from the exact plugin that acquired the lease,
+        // not the first installed plugin with this driver key. A driver key is
+        // only unique inside one manifest, so two plugins can share it. The
+        // by-key resolver could intersect this lease's verified methods with a
+        // different plugin's declaration. The resolver reads the manifest even
+        // when the worker is not running: an unverified declaration still
+        // resolves to false through the normalizer. The runtime fails closed
+        // when the pinned plugin id is absent, or when that exact plugin no
+        // longer declares this provider key; `declared` stays null.
+        const resolvedDriver = pluginId
+          ? await resolvePluginSandboxProviderDriverById({
+              db,
+              pluginId,
+              driverKey: providerKey,
+            })
+          : null;
         if (resolvedDriver) {
           declared = resolveDeclaredSandboxCapabilities(resolvedDriver.driver);
         }

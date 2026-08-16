@@ -1192,6 +1192,57 @@ describe("environment routes", () => {
       .toBe("supported");
   });
 
+  it("publishes reusable leases from the nested capability, not the legacy flag, so the API agrees with acquisition", async () => {
+    // The manifest sets the legacy flag `true` but the nested override `false`.
+    // Acquisition lets the nested value win and refuses reuse. The published
+    // API value must derive from the same declaration resolver and present the
+    // provider as not reusable.
+    mockListReadyPluginEnvironmentDrivers.mockResolvedValue([
+      {
+        pluginId: "plugin-1",
+        pluginKey: "acme.legacy-override-provider",
+        driverKey: "override-plugin",
+        displayName: "Override Sandbox",
+        supportsReusableLeases: true,
+        sandboxCapabilities: { reusableLeases: false },
+        configSchema: { type: "object", properties: {} },
+      },
+    ]);
+    const app = createApp({
+      type: "board",
+      userId: "user-1",
+      source: "local_implicit",
+    });
+
+    const res = await request(app).get("/api/companies/company-1/environments/capabilities");
+
+    expect(res.status).toBe(200);
+    expect(res.body.sandboxProviders["override-plugin"].supportsReusableLeases).toBe(false);
+  });
+
+  it("publishes reusable leases from the legacy flag when the manifest omits the nested override", async () => {
+    mockListReadyPluginEnvironmentDrivers.mockResolvedValue([
+      {
+        pluginId: "plugin-1",
+        pluginKey: "acme.legacy-only-provider",
+        driverKey: "legacy-plugin",
+        displayName: "Legacy Sandbox",
+        supportsReusableLeases: true,
+        configSchema: { type: "object", properties: {} },
+      },
+    ]);
+    const app = createApp({
+      type: "board",
+      userId: "user-1",
+      source: "local_implicit",
+    });
+
+    const res = await request(app).get("/api/companies/company-1/environments/capabilities");
+
+    expect(res.status).toBe(200);
+    expect(res.body.sandboxProviders["legacy-plugin"].supportsReusableLeases).toBe(true);
+  });
+
   it("rejects agent list reads for instance-scoped environments", async () => {
     mockEnvironmentService.list.mockResolvedValue([createEnvironment()]);
     mockAgentService.getById.mockResolvedValue({
