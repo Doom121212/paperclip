@@ -2854,7 +2854,7 @@ async function listIssueReviewAttentionMap(
     .map((row) => row.id);
   if (candidateIds.length === 0) return result;
 
-  const interactionRows: Array<{
+  const candidateInteractionRows: Array<{
     id: string;
     companyId: string;
     issueId: string;
@@ -2863,7 +2863,7 @@ async function listIssueReviewAttentionMap(
     createdAt: Date;
   }> = [];
   for (const chunk of chunkList(candidateIds, ISSUE_LIST_RELATED_QUERY_CHUNK_SIZE)) {
-    interactionRows.push(...await dbOrTx
+    candidateInteractionRows.push(...await dbOrTx
       .select({
         id: issueThreadInteractions.id,
         companyId: issueThreadInteractions.companyId,
@@ -2883,7 +2883,7 @@ async function listIssueReviewAttentionMap(
   // A pending interaction is a live review path regardless of issue status:
   // every resolver policy includes the Board, so a `blocked` card with a
   // pending ask still needs the full path pipeline run, not just `in_review`.
-  const pendingInteractionIssueIds = new Set(interactionRows.map((row) => row.issueId));
+  const pendingInteractionIssueIds = new Set(candidateInteractionRows.map((row) => row.issueId));
   const reviewIds = issueRows
     .filter((row) => row.companyId === companyId
       && (row.status === "in_review" || pendingInteractionIssueIds.has(row.id)))
@@ -2899,7 +2899,7 @@ async function listIssueReviewAttentionMap(
   }
   if (reviewIssues.length === 0) return result;
 
-  const [agentRows, activeRunRows, wakeRows, approvalRows, recoveryActionRows, recoveryIssueRows] = await Promise.all([
+  const [agentRows, activeRunRows, wakeRows, interactionRows, approvalRows, recoveryActionRows, recoveryIssueRows] = await Promise.all([
     dbOrTx
       .select({
         id: agents.id,
