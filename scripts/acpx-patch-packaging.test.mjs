@@ -9,7 +9,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -31,6 +31,24 @@ const dbPackage = JSON.parse(
 const releaseScript = await readFile(new URL("./release.sh", import.meta.url), "utf8");
 const releaseLib = await readFile(new URL("./release-lib.sh", import.meta.url), "utf8");
 const buildNpmScript = await readFile(new URL("./build-npm.sh", import.meta.url), "utf8");
+
+test("installed ACPX runtime contains the server-secret deny-list", async () => {
+  const acpxDistUrl = new URL("../packages/adapter-utils/node_modules/acpx/dist/", import.meta.url);
+  const javascriptFiles = (await readdir(acpxDistUrl)).filter((name) => name.endsWith(".js"));
+  const installedRuntime = (
+    await Promise.all(javascriptFiles.map((name) => readFile(new URL(name, acpxDistUrl), "utf8")))
+  ).join("\n");
+
+  for (const deniedKey of [
+    "PAPERCLIP_AGENT_JWT_SECRET",
+    "BETTER_AUTH_SECRET",
+    "PAPERCLIP_SECRETS_MASTER_KEY_FILE",
+    "DATABASE_URL",
+  ]) {
+    assert.equal(installedRuntime.includes(deniedKey), true, `${deniedKey} is absent from ACPX`);
+  }
+  assert.match(installedRuntime, /delete env\[key\]/);
+});
 
 test("published packages preserve the patched ACPX runtime", () => {
   assert.equal(
