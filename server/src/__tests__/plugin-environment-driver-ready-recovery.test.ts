@@ -529,13 +529,14 @@ describe("listReadyPluginEnvironmentDrivers reusable-lease method verification",
     } as unknown as PluginWorkerManager;
   }
 
-  it("verifies reusable-lease methods when the worker advertises both lifecycle methods", async () => {
+  it("verifies reusable-lease methods when the worker advertises all lifecycle methods", async () => {
     mockRegistry.list.mockResolvedValue([createPlugin("ready")]);
     const drivers = await listReadyPluginEnvironmentDrivers({
       db: {} as never,
       workerManager: createRunningWorker([
         "environmentResumeLease",
         "environmentReleaseLease",
+        "environmentDestroyLease",
         "environmentExecute",
       ]),
     });
@@ -548,7 +549,10 @@ describe("listReadyPluginEnvironmentDrivers reusable-lease method verification",
     mockRegistry.list.mockResolvedValue([createPlugin("ready")]);
     const drivers = await listReadyPluginEnvironmentDrivers({
       db: {} as never,
-      workerManager: createRunningWorker(["environmentReleaseLease"]),
+      workerManager: createRunningWorker([
+        "environmentReleaseLease",
+        "environmentDestroyLease",
+      ]),
     });
 
     expect(drivers).toHaveLength(1);
@@ -559,7 +563,27 @@ describe("listReadyPluginEnvironmentDrivers reusable-lease method verification",
     mockRegistry.list.mockResolvedValue([createPlugin("ready")]);
     const drivers = await listReadyPluginEnvironmentDrivers({
       db: {} as never,
-      workerManager: createRunningWorker(["environmentResumeLease"]),
+      workerManager: createRunningWorker([
+        "environmentResumeLease",
+        "environmentDestroyLease",
+      ]),
+    });
+
+    expect(drivers).toHaveLength(1);
+    expect(drivers[0]?.reusableLeaseMethodsVerified).toBe(false);
+  });
+
+  it("does not verify reusable-lease methods when the worker omits the destroy method", async () => {
+    // A provider that resumes and releases but cannot destroy a stale lease must
+    // not present as reusable. The reuse path destroys the stale lease when a
+    // resume fails, so without destroy the runtime would strand the lease.
+    mockRegistry.list.mockResolvedValue([createPlugin("ready")]);
+    const drivers = await listReadyPluginEnvironmentDrivers({
+      db: {} as never,
+      workerManager: createRunningWorker([
+        "environmentResumeLease",
+        "environmentReleaseLease",
+      ]),
     });
 
     expect(drivers).toHaveLength(1);

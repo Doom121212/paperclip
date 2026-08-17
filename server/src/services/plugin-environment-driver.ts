@@ -33,16 +33,20 @@ import type { PluginWorkerManager } from "./plugin-worker-manager.js";
 /**
  * The worker methods a sandbox provider must advertise before the host reuses
  * a provider lease across runs. The host resumes a lease through
- * `environmentResumeLease` and ends it through `environmentReleaseLease`, so a
- * provider that omits either method can never complete the reuse path.
+ * `environmentResumeLease`, ends it through `environmentReleaseLease`, and tears
+ * down a stale lease through `environmentDestroyLease`. The reuse path destroys
+ * the stale lease when a resume fails and then acquires a fresh lease, so a
+ * provider that omits any of the three methods can strand the stale lease and
+ * can never complete the reuse path.
  *
- * The runtime capability normalizer maps `reusableLeases` to the same two
- * methods, so the acquisition guard, the effective-capability snapshot, and the
- * published provider-capabilities value all read one source and cannot drift.
+ * The runtime capability normalizer maps `reusableLeases` to these same methods,
+ * so the acquisition guard, the effective-capability snapshot, and the published
+ * provider-capabilities value all read one source and cannot drift.
  */
 export const REUSABLE_LEASE_WORKER_METHODS = [
   "environmentResumeLease",
   "environmentReleaseLease",
+  "environmentDestroyLease",
 ] as const;
 
 export interface ReadyPluginWorkerRecovery {
@@ -61,11 +65,11 @@ export interface ReadyPluginEnvironmentDriver {
   supportsReusableLeases?: PluginEnvironmentDriverDeclaration["supportsReusableLeases"];
   sandboxCapabilities?: PluginEnvironmentDriverDeclaration["sandboxCapabilities"];
   /**
-   * The running worker for this exact plugin advertises BOTH reusable-lease
-   * lifecycle methods (`REUSABLE_LEASE_WORKER_METHODS`). The published
-   * provider-capabilities value grants reusable leases only when the
-   * declaration allows them AND this flag is true, so presentation matches the
-   * acquisition guard, which also verifies both methods live.
+   * The running worker for this exact plugin advertises ALL reusable-lease
+   * lifecycle methods (`REUSABLE_LEASE_WORKER_METHODS`: resume, release, and
+   * destroy). The published provider-capabilities value grants reusable leases
+   * only when the declaration allows them AND this flag is true, so presentation
+   * matches the acquisition guard, which also verifies the same methods live.
    */
   reusableLeaseMethodsVerified: boolean;
   supportsInteractiveSetup?: PluginEnvironmentDriverDeclaration["supportsInteractiveSetup"];
@@ -228,7 +232,7 @@ export async function listReadyPluginEnvironmentDrivers(input: {
     }
     // The plugin is running, so read the live worker's verified methods once per
     // plugin. A provider advertises reusable leases only when its worker carries
-    // both reuse lifecycle methods; the declaration alone never grants them.
+    // all reuse lifecycle methods; the declaration alone never grants them.
     const workerMethods = new Set(input.workerManager.getWorker(plugin.id)?.supportedMethods ?? []);
     const reusableLeaseMethodsVerified = REUSABLE_LEASE_WORKER_METHODS.every(
       (method) => workerMethods.has(method),

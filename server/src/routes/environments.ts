@@ -717,13 +717,13 @@ export function environmentRoutes(
             supportsUnsavedProbe: true,
             supportsRunExecution: true,
             // Publish reusable-lease support only when the declaration allows it
-            // AND the live worker verified both reuse lifecycle methods, so the
-            // presentation matches the acquisition guard, which requires both.
+            // AND the live worker verified all reuse lifecycle methods, so the
+            // presentation matches the acquisition guard, which requires them.
             // The declaration part uses the same resolver acquisition uses, so
             // the nested `sandboxCapabilities` override wins over the legacy
             // `supportsReusableLeases` flag: a manifest with legacy `true` and
             // nested `false` presents as not reusable. Default an absent value
-            // to false with `=== true`. A ready worker that omits either
+            // to false with `=== true`. A ready worker that omits any reuse
             // lifecycle method presents as not reusable, because acquisition
             // would always fall back to an ephemeral lease.
             supportsReusableLeases:

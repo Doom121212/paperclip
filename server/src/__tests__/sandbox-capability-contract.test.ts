@@ -174,7 +174,12 @@ describe("sandbox capability contract normalizer", () => {
 
     // A plug-in provider that advertises the equivalent verbs.
     const pluginEffective = resolveEffectiveSandboxCapabilities({
-      verifiedMethods: ["environmentResumeLease", "environmentReleaseLease", "environmentExecute"],
+      verifiedMethods: [
+        "environmentResumeLease",
+        "environmentReleaseLease",
+        "environmentDestroyLease",
+        "environmentExecute",
+      ],
       declared,
     });
 
@@ -205,13 +210,35 @@ describe("sandbox capability contract normalizer", () => {
       expect(effective[key]).toBe(false);
     }
 
-    // A single missing prerequisite verb is enough: reusable leases needs both
-    // resume and release, so resume alone does not grant it.
+    // A single missing prerequisite verb is enough: reusable leases needs
+    // resume, release, and destroy, so resume alone does not grant it.
     const resumeOnly = resolveEffectiveSandboxCapabilities({
       verifiedMethods: ["environmentResumeLease"],
       declared: { reusableLeases: true },
     });
     expect(resumeOnly.reusableLeases).toBe(false);
+  });
+
+  it("test_reusable_provider_without_destroy_support_resolves_false", () => {
+    // A provider that verifies resume and release but not destroy is not
+    // eligible for reusable leases. The reuse path destroys a stale lease when a
+    // resume fails, so a provider without destroy support would strand the lease.
+    const resumeAndReleaseOnly = resolveEffectiveSandboxCapabilities({
+      verifiedMethods: ["environmentResumeLease", "environmentReleaseLease"],
+      declared: { reusableLeases: true },
+    });
+    expect(resumeAndReleaseOnly.reusableLeases).toBe(false);
+
+    // Adding the destroy verb makes the same provider eligible.
+    const allReuseVerbs = resolveEffectiveSandboxCapabilities({
+      verifiedMethods: [
+        "environmentResumeLease",
+        "environmentReleaseLease",
+        "environmentDestroyLease",
+      ],
+      declared: { reusableLeases: true },
+    });
+    expect(allReuseVerbs.reusableLeases).toBe(true);
   });
 
   it("test_unknown_or_unavailable_verification_resolves_false", () => {

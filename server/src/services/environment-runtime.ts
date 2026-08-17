@@ -96,14 +96,17 @@ export type SandboxCapabilityKey = (typeof SANDBOX_CAPABILITY_KEYS)[number];
  * execution guards:
  * - `nativeSyncIn`/`nativeSyncOut` require the matching sync verb; the native
  *   sync guard checks both verbs before it routes a lease to the native hook.
- * - `reusableLeases` requires `environmentResumeLease` (reattach) and
- *   `environmentReleaseLease` (end-of-run release); both run on the reuse path.
+ * - `reusableLeases` requires `environmentResumeLease` (reattach),
+ *   `environmentReleaseLease` (end-of-run release), and `environmentDestroyLease`
+ *   (stale-lease teardown). All three run on the reuse path: the runtime resumes
+ *   or releases the lease, and it destroys the stale lease when a resume fails
+ *   before it acquires a fresh lease.
  * - `persistentProcessSessions` and `independentControlCommands` require
  *   `environmentExecute`; both run commands through it.
  */
 const SANDBOX_CAPABILITY_PREREQUISITE_METHODS: Record<SandboxCapabilityKey, readonly (readonly string[])[]> = {
-  // Reusable leases require BOTH reuse verbs. Each verb is its own required
-  // group, so both must be verified. The list function that publishes
+  // Reusable leases require ALL reuse verbs. Each verb is its own required
+  // group, so every one must be verified. The list function that publishes
   // provider-level reusable support checks the same verbs; both read from
   // `REUSABLE_LEASE_WORKER_METHODS`, so the runtime guard and the published
   // value cannot drift.
@@ -129,6 +132,8 @@ function capabilityIsVerified(
  * the SAME normalizer. A built-in provider has no native sync hooks, so it never
  * verifies a sync verb. It verifies `environmentExecute` when it implements
  * `execute`, and the reuse verbs only when it declares `supportsReusableLeases`.
+ * A built-in reusable provider destroys its own leases in-process, so it
+ * verifies `environmentDestroyLease` with the two reuse verbs.
  */
 export function builtinSandboxProviderVerifiedMethods(
   provider: { supportsReusableLeases?: boolean; execute?: unknown } | null | undefined,
@@ -139,7 +144,11 @@ export function builtinSandboxProviderVerifiedMethods(
     methods.push("environmentExecute");
   }
   if (provider.supportsReusableLeases === true) {
-    methods.push("environmentResumeLease", "environmentReleaseLease");
+    methods.push(
+      "environmentResumeLease",
+      "environmentReleaseLease",
+      "environmentDestroyLease",
+    );
   }
   return methods;
 }
@@ -1054,13 +1063,14 @@ function createSandboxEnvironmentDriver(
         // Require the reusable-lease capability AND a worker that verifies the
         // reuse methods. The provider must first opt in through the declaration:
         // the nested `sandboxCapabilities.reusableLeases` wins over the legacy
-        // `supportsReusableLeases` flag. The worker must also verify both
-        // `environmentResumeLease` and `environmentReleaseLease` (the reuse
-        // prerequisite verbs) before the runtime resumes or releases a reusable
-        // lease. A provider that declares `reusableLeases` true but whose worker
-        // does not verify the two methods fails closed and uses an ephemeral
-        // lease, so the runtime never dispatches a resume or a release the worker
-        // cannot serve.
+        // `supportsReusableLeases` flag. The worker must also verify
+        // `environmentResumeLease`, `environmentReleaseLease`, and
+        // `environmentDestroyLease` (the reuse prerequisite verbs) before the
+        // runtime resumes, releases, or tears down a reusable lease. A provider
+        // that declares `reusableLeases` true but whose worker does not verify
+        // all three methods fails closed and uses an ephemeral lease, so the
+        // runtime never dispatches a resume, a release, or a destroy the worker
+        // cannot serve, and it never strands a stale lease it cannot destroy.
         const declaredReusableLeases =
           resolveDeclaredSandboxCapabilities(pluginProvider.resolved.driver).reusableLeases === true;
         const pluginVerifiedMethods = new Set(
